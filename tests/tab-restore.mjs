@@ -23,7 +23,9 @@ async function restore(saved, missing = [], welcome = false) {
     };
     for (const [method, kind] of [['openText', 'text'], ['openFile', 'html'], ['openFolder', 'files']]) {
         context[method] = async path => {
-            const tab = { kind, path };
+            const tab = { kind: method === 'openFile'
+                ? (/\.pdf$/i.test(path) ? 'pdf' : /\.(svg|png|jpe?g|gif|webp)$/i.test(path) ? 'image' : kind)
+                : kind, path };
             context.tabs.push(tab);
             context.active = tab;
         };
@@ -52,6 +54,20 @@ assert.equal(result.context.active.title, 'ソース');
 result = await restore({ tabs: [], active: null });
 assert.equal(result.context.tabs.length, 0);
 assert(!result.calls.includes('default-dashboard'));
+for (const extension of ['SVG', 'png', 'JPG', 'jpeg', 'gif', 'webp']) {
+    const path = `図.${extension}`;
+    result = await restore({ tabs: [{ kind: 'image', path, title: '図' }], active: 0 });
+    assert.equal(result.context.active.kind, 'image');
+    assert.equal(result.context.active.path, path);
+}
+for (const path of ['資料.pdf', '資料.PDF']) {
+    result = await restore({ tabs: [{ kind: 'pdf', path, title: '資料' }], active: 0 });
+    assert.equal(result.context.active.kind, 'pdf');
+    assert.equal(result.context.active.path, path);
+}
+result = await restore({ tabs: [{ kind: 'pdf', path: 'missing.pdf', title: '資料' }], active: 0 }, ['missing.pdf']);
+assert.equal(result.context.tabs.length, 0);
+assert(result.calls.some(call => call.includes('復元できなかったタブ')));
 result = await restore(null);
 assert(result.calls.includes('default-dashboard'));
 result = await restore(saved, [], true);

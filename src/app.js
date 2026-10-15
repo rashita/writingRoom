@@ -1,6 +1,7 @@
 import { recordProgress } from './progress.js';
 import { createFocusMode } from './focus-mode.js';
 import { updateCharacterCount } from './character-count.js';
+import { createNumberedNavigation } from './numbered-navigation.js';
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { getCurrentWindow } = window.__TAURI__.window;
@@ -69,7 +70,8 @@ function renderTabs() {
         return;
     }
     for (const t of tabs) {
-    const b = button((t.doc && t.doc.text !== t.doc.original ? '● ' : '') + t.title, () => { active = t; render(); });
+    const dirty = t.doc && t.doc.text !== t.doc.original;
+    const b = button(t.title, () => { active = t; render(); });
     b.classList.toggle('active', t === active);
     b.dataset.tabId = t.id;
     if (t.kind === 'text' || t.kind === 'html') {
@@ -86,7 +88,9 @@ function renderTabs() {
     }
     const close = document.createElement('span');
     close.className = 'close';
-    close.textContent = '×';
+    close.textContent = dirty ? '○' : '×';
+    close.classList.toggle('unsaved', !!dirty);
+    close.title = dirty ? '未保存の編集があります — タブを閉じる' : 'タブを閉じる';
     close.onclick = async (e) => { e.stopPropagation(); try {
         await editQueue;
         if (t.doc && t.doc.text !== t.doc.original && !await confirm('未保存の編集があります。タブを閉じますか？編集内容はプロジェクトを閉じるまで保持されます。', { title: 'タブを閉じる' }))
@@ -188,6 +192,24 @@ function render() { focusMode.sync(); renderTabs(); content.replaceChildren(); u
     iframe.sandbox = 'allow-scripts';
     iframe.src = assetUrl(t.path);
     content.append(iframe);
+} if (t.kind === 'pdf') {
+    toolbar(t.path);
+    const iframe = document.createElement('iframe');
+    iframe.title = t.title;
+    iframe.src = `${assetUrl(t.path)}?v=${Date.now()}`;
+    content.append(iframe);
+} if (t.kind === 'image') {
+    const bar = toolbar(t.path);
+    const preview = document.createElement('div');
+    preview.className = 'image-preview';
+    const image = document.createElement('img');
+    image.alt = t.title;
+    image.src = `${assetUrl(t.path)}?v=${Date.now()}`;
+    image.onerror = () => status(`${t.title} を表示できません`, true);
+    bar.append(button('画面に合わせる', () => preview.classList.remove('actual-size')),
+        button('原寸で表示', () => preview.classList.add('actual-size')));
+    preview.append(image);
+    content.append(preview);
 } if (t.kind === 'text') {
     const editor = document.createElement('textarea');
     editor.spellcheck = false;
@@ -222,11 +244,15 @@ async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.pa
 catch (e) {
     fail(e);
 } }
-const isText = path => /\.(txt|md|markdown|html?|css|js|json|csv|log|yaml|yml|xml|tex)$/i.test(path);
+const isText = path => /\.(txt|md|markdown|mmd|html?|css|js|json|csv|log|yaml|yml|xml|tex)$/i.test(path);
 const assetUrl = path => `project://localhost/${win.label}/${path.split('/').map(encodeURIComponent).join('/')}`;
 async function openFolder(path) { addTab({ kind: 'files', path, title: path.split('/').at(-1) || 'ファイル' }); }
 async function openFile(path) { if (/\.html?$/i.test(path))
     addTab({ kind: 'html', path, folder: path.split('/').slice(0, -1).join('/'), title: path.split('/').at(-1) });
+else if (/\.(svg|png|jpe?g|gif|webp)$/i.test(path))
+    addTab({ kind: 'image', path, title: path.split('/').at(-1) });
+else if (/\.pdf$/i.test(path))
+    addTab({ kind: 'pdf', path, title: path.split('/').at(-1) });
 else if (isText(path))
     await openText(path);
 else
@@ -278,7 +304,7 @@ async function setup() {
                 await invoke('validate_saved_tab', { tab });
                 if (tab.kind === 'files') { await invoke('list_files', { folder: tab.path }); await openFolder(tab.path); }
                 else if (tab.kind === 'text') await openText(tab.path);
-                else if (tab.kind === 'html') await openFile(tab.path);
+                else if (tab.kind === 'html' || tab.kind === 'image' || tab.kind === 'pdf') await openFile(tab.path);
                 else continue;
                 active.title = tab.title;
                 restored.set(index, active);
@@ -305,6 +331,49 @@ await listen('history-error', ({ payload }) => fail(payload));
 await listen('open-recent-requested', ({ payload: root }) => openProjectRoot(root).catch(fail));
 await listen('open-project-requested', () => chooseProject().catch(fail));
 await listen('save-requested', () => save().catch(fail));
+const navigateNumbered = createNumberedNavigation({ getActive: () => active, invoke, confirm,
+    prepare: async tab => {
+        await editQueue;
+        if (tab.syncError) throw new Error(tab.syncError);
+        if (tab.doc.text !== tab.doc.original) {
+            if (!await confirm(`${tab.title} に未保存の編集があります。保存して移動しますか？`, {
+                title: '連番ファイルへ移動', okLabel: '保存して移動', cancelLabel: 'キャンセル'
+            })) return false;
+            await save(tab);
+        }
+        return true;
+    },
+    openText: async (path, source) => {
+        await editQueue;
+        if (source.syncError) throw new Error(source.syncError);
+        if (source.doc.text !== source.doc.original) throw new Error('未保存の編集があります。もう一度移動してください。');
+        const existing = tabs.find(t => t.kind === 'text' && t.path === path);
+        const doc = existing ? null : await invoke('read_document', { path });
+        if (active !== source) return;
+        if (source.doc.text !== source.doc.original) throw new Error('未保存の編集があります。もう一度移動してください。');
+        if (existing) active = existing;
+        else {
+            if (source.contextMenu) await source.contextMenu.close();
+            source.contextMenu = null;
+            source.path = path;
+            source.title = path.split('/').at(-1);
+            source.doc = doc;
+        }
+        render();
+        content.querySelector('textarea')?.focus();
+    }, status });
+await listen('numbered-previous-requested', () => navigateNumbered(-1).catch(fail));
+await listen('numbered-next-requested', () => navigateNumbered(1).catch(fail));
+function switchTab(direction) {
+    if (tabs.length < 2) return;
+    const index = tabs.indexOf(active);
+    active = tabs[(index + direction + tabs.length) % tabs.length];
+    render();
+    tabsEl.querySelector(`[data-tab-id="${active.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    content.querySelector('textarea')?.focus();
+}
+await listen('tab-previous-requested', () => switchTab(-1));
+await listen('tab-next-requested', () => switchTab(1));
 await listen('record-progress-requested', async () => {
     try {
         await editQueue;

@@ -62,7 +62,7 @@ struct RecentProject {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum TabKind { Files, Html, Text }
+enum TabKind { Files, Html, Text, Image, Pdf }
 #[derive(Clone, Serialize, Deserialize)]
 struct SavedTab { kind: TabKind, path: String, title: String }
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -109,6 +109,9 @@ fn validate_saved_tab(window: WebviewWindow, state: State<Mutex<Store>>, tab: Sa
     let valid = match tab.kind {
         TabKind::Files => path.is_dir(),
         TabKind::Text => path.is_file(),
+        TabKind::Pdf => path.is_file() && path.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")),
+        TabKind::Image => path.is_file() && path.extension().and_then(|e| e.to_str()).is_some_and(|ext|
+            matches!(ext.to_ascii_lowercase().as_str(), "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp")),
         TabKind::Html => path.is_file() && matches!(path.extension().and_then(|e| e.to_str()), Some("html" | "htm")),
     };
     if valid { Ok(()) } else { Err("タブの対象が見つかりません".into()) }
@@ -546,13 +549,40 @@ fn dashboard_disabled(
     ))
 }
 #[tauri::command]
-fn read_document(window: WebviewWindow, state: State<Mutex<Store>>, path: String) -> Result<Doc> {
+fn create_numbered_document(window: WebviewWindow, state: State<Mutex<Store>>, path: String) -> Result<()> {
+    let s = session(&window, &state)?;
+    create_empty_document(&s.root, &path)
+}
+fn create_empty_document(root: &str, relative: &str) -> Result<()> {
+    let path = Path::new(relative);
+    let name = path.file_name().ok_or("ファイル名がありません")?;
+    let parent = scoped(root, path.parent().and_then(|p| p.to_str()).unwrap_or(""))?;
+    let target = parent.join(name);
+    // Never follow or overwrite an entry created while the confirmation was open.
+    match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = scoped(root, relative)?;
+            if existing.is_file() { Ok(()) } else { Err("同名のフォルダが存在します".into()) }
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+#[tauri::command]
+fn read_document(window: WebviewWindow, app: tauri::AppHandle, state: State<Mutex<Store>>, path: String) -> Result<Doc> {
     let s = session(&window, &state)?;
     let p = scoped(&s.root, &path)?;
     let key = p.to_string_lossy().into_owned();
     let mut store = lock(&state);
-    if let Some(d) = store.docs.get(&key) {
-        return Ok(d.clone());
+    let d = read_document_from_disk(&mut store.docs, &p, key)?;
+    app.emit("document-changed", &d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+fn read_document_from_disk(docs: &mut HashMap<String, Doc>, p: &Path, key: String) -> Result<Doc> {
+    if let Some(d) = docs.get(&key) {
+        if d.text != d.original {
+            return Ok(d.clone());
+        }
     }
     if fs::metadata(&p).map_err(|e| e.to_string())?.len() > 10 * 1024 * 1024 {
         return Err("編集できるファイルは10MBまでです".into());
@@ -562,9 +592,9 @@ fn read_document(window: WebviewWindow, state: State<Mutex<Store>>, path: String
         path: key.clone(),
         original: text.clone(),
         text,
-        revision: 0,
+        revision: docs.get(&key).map_or(0, |d| d.revision + 1),
     };
-    store.docs.insert(key, d.clone());
+    docs.insert(key, d.clone());
     Ok(d)
 }
 #[tauri::command]
@@ -880,8 +910,13 @@ fn main() {
             let increase = MenuItem::with_id(app,"font-increase","文字を大きくする",true,Some("CmdOrCtrl+="))?;
             let decrease = MenuItem::with_id(app,"font-decrease","文字を小さくする",true,Some("CmdOrCtrl+-"))?;
             let reset = MenuItem::with_id(app,"font-reset","文字サイズを標準に戻す",true,Some("CmdOrCtrl+0"))?;
+            let previous = MenuItem::with_id(app,"numbered-previous","前の連番ファイル",true,Some("CmdOrCtrl+Alt+["))?;
+            let next = MenuItem::with_id(app,"numbered-next","次の連番ファイル",true,Some("CmdOrCtrl+Alt+]"))?;
+            let previous_tab = MenuItem::with_id(app,"tab-previous","前のタブ",true,Some("CmdOrCtrl+Alt+Left"))?;
+            let next_tab = MenuItem::with_id(app,"tab-next","次のタブ",true,Some("CmdOrCtrl+Alt+Right"))?;
+            let navigation = SubmenuBuilder::new(app,"移動").item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
             let view = SubmenuBuilder::new(app,"表示").item(&increase).item(&decrease).item(&reset).separator().item(&focus).separator().item(&inspect).build()?;
-            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&view]).build()
+            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&view,&navigation]).build()
         })
         .on_menu_event(|app,event| {
             if event.id().as_ref() == "open-welcome" {
@@ -904,7 +939,7 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "open-project" | "save-document" | "record-progress" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset") {
+            if matches!(event.id().as_ref(), "open-project" | "save-document" | "record-progress" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
@@ -915,6 +950,10 @@ fn main() {
                         "font-increase" => "font-increase-requested",
                         "font-decrease" => "font-decrease-requested",
                         "font-reset" => "font-reset-requested",
+                        "numbered-previous" => "numbered-previous-requested",
+                        "numbered-next" => "numbered-next-requested",
+                        "tab-previous" => "tab-previous-requested",
+                        "tab-next" => "tab-next-requested",
                         _ => "open-project-requested",
                     };
                     let _ = window.emit(name,());
@@ -943,10 +982,12 @@ fn main() {
                     Ok(html.into_bytes())
                 } else { Ok(bytes) }
             })();
-            let mime = match uri.path().rsplit('.').next().unwrap_or("") {
+            let extension = uri.path().rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            let mime = match extension.as_str() {
                 "html" | "htm" => "text/html; charset=utf-8",
                 "css" => "text/css", "js" | "mjs" => "text/javascript",
                 "svg" => "image/svg+xml", "png" => "image/png",
+                "pdf" => "application/pdf",
                 "jpg" | "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp",
                 "json" => "application/json", _ => "application/octet-stream"
             };
@@ -955,7 +996,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -996,6 +1037,52 @@ fn decode(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn numbered_creation_preserves_existing_files_and_project_boundary() {
+        let dir = std::env::temp_dir().join(format!("writingroom-numbered-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let root = dir.join("project");
+        fs::create_dir_all(root.join("draft")).unwrap();
+        let root_str = root.to_str().unwrap();
+        create_empty_document(root_str, "draft/chapter002.md").unwrap();
+        let target = root.join("draft/chapter002.md");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "");
+        fs::write(&target, "keep this manuscript").unwrap();
+        create_empty_document(root_str, "draft/chapter002.md").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep this manuscript");
+        assert!(create_empty_document(root_str, "../chapter003.md").is_err());
+        assert!(!dir.join("chapter003.md").exists());
+        fs::create_dir(root.join("chapter004.md")).unwrap();
+        assert!(create_empty_document(root_str, "chapter004.md").is_err());
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink(&dir, root.join("outside")).unwrap();
+            assert!(create_empty_document(root_str, "outside/chapter005.md").is_err());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn reopening_document_reads_disk_unless_unsaved() {
+        let dir = std::env::temp_dir().join(format!("writingroom-reopen-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("draft.txt");
+        let key = path.to_string_lossy().into_owned();
+        let mut docs = HashMap::new();
+        fs::write(&path, "before").unwrap();
+        let first = read_document_from_disk(&mut docs, &path, key.clone()).unwrap();
+        fs::write(&path, "external edit").unwrap();
+        let reopened = read_document_from_disk(&mut docs, &path, key.clone()).unwrap();
+        assert_eq!(reopened.text, "external edit");
+        assert_eq!(reopened.original, "external edit");
+        assert!(reopened.revision > first.revision);
+        docs.get_mut(&key).unwrap().text = "unsaved edit".into();
+        fs::write(&path, "another external edit").unwrap();
+        let dirty = read_document_from_disk(&mut docs, &path, key.clone()).unwrap();
+        assert_eq!(dirty.text, "unsaved edit");
+        assert_eq!(dirty.original, "external edit");
+        docs.get_mut(&key).unwrap().text = dirty.original;
+        fs::remove_file(&path).unwrap();
+        assert!(read_document_from_disk(&mut docs, &path, key).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn editor_font_size_limits_and_reset() {
         assert_eq!(adjusted_font_size(16, "increase").unwrap(), 17);
