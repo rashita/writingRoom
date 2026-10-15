@@ -1,0 +1,12 @@
+<script>
+document.addEventListener('click', event => {
+    const anchor = event.target.closest?.('a[href]');
+    if (!anchor || event.defaultPrevented) return;
+    const url = new URL(anchor.href);
+    const internal = url.protocol === 'project:' || url.hostname === 'project.localhost';
+    if (internal && url.pathname === location.pathname && url.search === location.search && url.hash) return;
+    if (['javascript:', 'data:', 'file:', 'blob:', 'about:', 'tauri:', 'asset:', 'ipc:'].includes(url.protocol)) return;
+    event.preventDefault();
+    parent.postMessage({ type: 'project-link', url: url.href }, '*');
+});
+</script>

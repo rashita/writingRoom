@@ -1,0 +1,15 @@
+{
+  "identifier": "main",
+  "windows": [
+    "main",
+    "welcome-*",
+    "project-*",
+    "editor-*"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-message",
+    "core:window:allow-set-title"
+  ]
+}

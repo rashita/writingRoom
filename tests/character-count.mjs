@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import { countCharacters, updateCharacterCount } from '../src/character-count.js';
+
+assert.equal(countCharacters(''), 0);
+assert.equal(countCharacters('日本語の文章。'), 7);
+assert.equal(countCharacters('あ い　う\t。'), 7);
+assert.equal(countCharacters('あ\nい\r\nう\rえ\u2028お\u2029'), 5);
+assert.equal(countCharacters('か\u3099が𠮷👨‍👩‍👧‍👦👍🏽🇯🇵'), 6);
+const element = {};
+updateCharacterCount(element, 'あ'.repeat(1234));
+assert.equal(element.textContent, '1,234文字');
+assert.equal(element.hidden, false);
+updateCharacterCount(element, '');
+assert.equal(element.textContent, '0文字');
+updateCharacterCount(element, null);
+assert.equal(element.hidden, true);
+assert.equal(element.textContent, '');
+updateCharacterCount(element, '次のタブ');
+assert.equal(element.hidden, false);
+assert.equal(element.textContent, '4文字');
+console.log('Character count checks passed');

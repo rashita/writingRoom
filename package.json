@@ -1,0 +1,15 @@
+{
+  "name": "writing-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check": "node --check src/app.js",
+    "test": "node tests/tab-restore.mjs && node tests/focus-mode.mjs && node tests/character-count.mjs && cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

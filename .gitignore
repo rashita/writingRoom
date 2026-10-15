@@ -1,0 +1,29 @@
+# Dependencies and build output (keep package-lock.json and Cargo.lock)
+node_modules/
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.p12
+*.pfx
+
+# Writing Room local project/session state
+/.writingroom.json
+/recent-projects.json
+/workspace-state.json
+/editor-preferences.json
+
+# Logs and editor temporary files
+*.log
+*.swp
+*.swo
+*~
+
+# macOS metadata
+.DS_Store
+._*
