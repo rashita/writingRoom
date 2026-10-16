@@ -2,6 +2,21 @@
 
 nav button.recent-project{color:#77847b;background:#edf0eb;font-weight:400}nav button.recent-project:hover{color:#31604f;background:#e0e9df}nav button.recent-project.unavailable{color:#9b8b82}nav button{user-select:none}
 
+/* Keep the tab row's height stable while retaining horizontal scrolling. */
+#tabs {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+#tabs::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+#tabs > button {
+    flex-shrink: 0;
+}
+
 /* Keep prose centered while the editing surface fills the window. */
 .image-preview {
     flex: 1;
