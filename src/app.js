@@ -15,6 +15,9 @@ const win = getCurrentWindow();
 const content = document.querySelector('#content');
 const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
+// Kept only for this window's lifetime, including after a tab is closed.
+const editorPositions = new Map();
+let rememberEditorPosition = () => {};
 const focusMode = createFocusMode(document.body, () => active?.kind === 'text' ? content.querySelector('textarea') : null);
 window.addEventListener('keydown', focusMode.handleKeydown);
 let editQueue = Promise.resolve();
@@ -168,7 +171,15 @@ async function showTabMenu(tab) {
     await tab.contextMenu.popup(new LogicalPosition(bounds.left, bounds.bottom), win);
 }
 function toolbar(path) { const el = document.createElement('div'); el.className = 'toolbar'; const label = document.createElement('span'); label.className = 'path'; label.textContent = path || 'プロジェクト直下'; el.append(label); content.append(el); return el; }
-function render() { focusMode.sync(); renderTabs(); content.replaceChildren(); updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null); if (!active) {
+function focusEditor() {
+    const editor = content.querySelector('textarea');
+    if (!editor) return;
+    const { scrollTop, scrollLeft } = editor;
+    editor.focus({ preventScroll: true });
+    editor.scrollTop = scrollTop;
+    editor.scrollLeft = scrollLeft;
+}
+function render() { rememberEditorPosition(); rememberEditorPosition = () => {}; focusMode.sync(); renderTabs(); content.replaceChildren(); updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null); if (!active) {
     const box = document.createElement('div');
     box.className = 'welcome';
     const h = document.createElement('h1');
@@ -217,9 +228,18 @@ function render() { focusMode.sync(); renderTabs(); content.replaceChildren(); u
     const editor = document.createElement('textarea');
     editor.spellcheck = false;
     editor.value = t.doc.text;
+    const positionKey = JSON.stringify([session.root, t.path]);
+    const position = editorPositions.get(positionKey) || { start: 0, end: 0, direction: 'none', top: 0, left: 0 };
+    editor.setSelectionRange(position.start, position.end, position.direction);
+    rememberEditorPosition = () => editorPositions.set(positionKey, {
+        start: editor.selectionStart, end: editor.selectionEnd, direction: editor.selectionDirection,
+        top: editor.scrollTop, left: editor.scrollLeft
+    });
     editor.setAttribute('aria-label', t.title);
     editor.addEventListener('input', () => { const text = editor.value; t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke('update_document', { path: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); });
     content.append(editor);
+    editor.scrollTop = position.top;
+    editor.scrollLeft = position.left;
 } }
 async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.path.split('/').slice(0, -1).join('/'); if (t.path)
     bar.append(button('↑ 上へ', () => openFolder(parent))); bar.append(button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
@@ -364,7 +384,7 @@ const navigateNumbered = createNumberedNavigation({ getActive: () => active, inv
             source.doc = doc;
         }
         render();
-        content.querySelector('textarea')?.focus();
+        focusEditor();
     }, status });
 await listen('numbered-previous-requested', () => navigateNumbered(-1).catch(fail));
 await listen('numbered-next-requested', () => navigateNumbered(1).catch(fail));
@@ -374,10 +394,37 @@ function switchTab(direction) {
     active = tabs[(index + direction + tabs.length) % tabs.length];
     render();
     tabsEl.querySelector(`[data-tab-id="${active.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    content.querySelector('textarea')?.focus();
+    focusEditor();
 }
 await listen('tab-previous-requested', () => switchTab(-1));
 await listen('tab-next-requested', () => switchTab(1));
+await listen('track-document-requested', async () => {
+    try {
+        if (document.querySelector('dialog[open]')) return;
+        const tab = active;
+        if (tab?.kind !== 'text') throw new Error('追跡に追加する原稿の編集タブを開いてください。');
+        const path = tab.path;
+        await editQueue;
+        if (tab.syncError) throw new Error(tab.syncError);
+        if (tab.doc.text !== tab.doc.original) {
+            if (!await confirm('この原稿を保存してから追跡に追加しますか？', { title: '追跡に追加', okLabel: '保存して追加' })) return;
+            if (tab.path !== path) return;
+            await save(tab);
+        }
+        if (tab.path !== path) return;
+        const added = await invoke('track_document', { path });
+        status(added ? `${tab.title} を追跡に追加しました。「進捗を記録」でcommitできます` : `${tab.title} はすでに追跡されています`);
+    } catch (error) { fail(error); }
+});
+await listen('record-project-progress-requested', async () => {
+    try {
+        if (document.querySelector('dialog[open]')) return;
+        if (!session) throw new Error('プロジェクトを開いてください。');
+        if (!await confirm('プロジェクト内の未保存の原稿を保存してから、全体の差分を確認しますか？', { title: 'プロジェクトを記録', okLabel: '保存して続ける' })) return;
+        await prepareTaskExecution();
+        await recordProgress({ invoke, status, project: true });
+    } catch (error) { fail(error); }
+});
 await listen('record-progress-requested', async () => {
     try {
         await editQueue;
@@ -385,7 +432,7 @@ await listen('record-progress-requested', async () => {
         if (tab?.kind !== 'text') throw new Error('記録する原稿の編集タブを開いてください。');
         if (tab.syncError) throw new Error(tab.syncError);
         if (tab.doc.text !== tab.doc.original) {
-            if (!await confirm('この原稿を保存してから差分を確認しますか？', { title: '進捗を記録', okLabel: '保存して続ける' })) return;
+            if (!await confirm('この原稿を保存してから差分を確認しますか？', { title: 'この原稿を記録', okLabel: '保存して続ける' })) return;
             await save(tab);
         }
         await recordProgress({ path: tab.path, invoke, status });
