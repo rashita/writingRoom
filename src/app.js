@@ -1,3 +1,4 @@
+import { showTaskLog, runNamedTask, manageNamedTasks } from './named-tasks.js';
 import { recordProgress } from './progress.js';
 import { createFocusMode } from './focus-mode.js';
 import { updateCharacterCount } from './character-count.js';
@@ -91,22 +92,24 @@ function renderTabs() {
     close.textContent = dirty ? '○' : '×';
     close.classList.toggle('unsaved', !!dirty);
     close.title = dirty ? '未保存の編集があります — タブを閉じる' : 'タブを閉じる';
-    close.onclick = async (e) => { e.stopPropagation(); try {
-        await editQueue;
-        if (t.doc && t.doc.text !== t.doc.original && !await confirm('未保存の編集があります。タブを閉じますか？編集内容はプロジェクトを閉じるまで保持されます。', { title: 'タブを閉じる' }))
-            return;
-        tabs = tabs.filter(x => x !== t);
-        if (t.contextMenu) await t.contextMenu.close();
-        if (active === t)
-            active = tabs.at(-1);
-        render();
-    }
-    catch (error) {
-        fail(error);
-    } };
+    close.onclick = e => { e.stopPropagation(); closeTab(t).catch(fail); };
     b.append(close);
     tabsEl.append(b);
 } }
+async function closeTab(tab) {
+    if (!tab || document.querySelector('dialog[open]')) return;
+    await editQueue;
+    if (!tabs.includes(tab)) return;
+    if (tab.doc && tab.doc.text !== tab.doc.original && !await confirm('未保存の編集があります。タブを閉じますか？編集内容はプロジェクトを閉じるまで保持されます。', { title: 'タブを閉じる' })) return;
+    tabs = tabs.filter(t => t !== tab);
+    if (tab.contextMenu) await tab.contextMenu.close();
+    if (active === tab) active = tabs.at(-1);
+    render();
+}
+await listen('close-tab-requested', () => closeTab(active).catch(fail));
+await listen('close-window-requested', () => {
+    if (!document.querySelector('dialog[open]')) win.close().catch(fail);
+});
 async function refreshHistory() {
     const projects = await invoke('recent_projects');
     for (const [root, menu] of historyMenus) {
@@ -190,7 +193,7 @@ function render() { focusMode.sync(); renderTabs(); content.replaceChildren(); u
     const iframe = document.createElement('iframe');
     iframe.title = 'プロジェクトのダッシュボード';
     iframe.sandbox = 'allow-scripts';
-    iframe.src = assetUrl(t.path);
+    iframe.src = `${assetUrl(t.path)}?v=${Date.now()}`;
     content.append(iframe);
 } if (t.kind === 'pdf') {
     toolbar(t.path);
@@ -287,7 +290,7 @@ async function setup() {
     session = await invoke('get_session');
     if (!session) {
         canResumeWorkspace = await invoke('can_resume_workspace');
-        render(); await refreshHistory(); return;
+        render(); await refreshHistory(); await invoke('refresh_task_menu'); return;
     }
     const projectName = session.root.split('/').at(-1);
     await win.setTitle(session.file ? `${session.file.split('/').at(-1)} — Writing Room — ${projectName}` : `Writing Room — ${projectName}`);
@@ -322,6 +325,7 @@ else {
     restoringTabs = false;
     status(session.root);
     rememberTabs();
+    await invoke('refresh_task_menu');
     if (missing.length) await message(`復元できなかったタブがあります。\n\n${missing.join('\n')}`, { title: 'タブの復元', kind: 'warning' });
 }
 async function chooseProject() { const root = await open({ title: '執筆プロジェクトのフォルダを選ぶ', directory: true, multiple: false }); if (!root)
@@ -488,3 +492,64 @@ async function resumeWorkspace() {
     }
 }
 setup().catch(fail);
+await win.onFocusChanged(({ payload: focused }) => {
+    if (focused) invoke('refresh_task_menu').catch(fail);
+});
+
+await listen('manage-tasks-requested', () => {
+    if (!session) { message('プロジェクトを開いてからコマンドを登録してください').catch(fail); return; }
+    manageNamedTasks({ invoke, status, confirm }).catch(fail);
+});
+
+await listen('run-task-requested', ({ payload: id }) => {
+    if (!session) { message('プロジェクトを開いてからコマンドを実行してください').catch(fail); return; }
+    runNamedTask({ invoke, status, prepare: prepareTaskExecution, id, openInApp: openTaskOutputInApp }).catch(fail);
+});
+
+await listen('prepare-task-save', async ({ payload }) => {
+    let error;
+    try {
+        await editQueue;
+        if (tabs.some(tab => tab.syncError)) throw new Error('同期できていない編集があります。内容を確認してください。');
+    } catch (e) { error = String(e); }
+    await window.__TAURI__.event.emitTo(payload.sender, 'task-save-ready', { request: payload.request, label: win.label, error });
+});
+async function prepareTaskExecution() {
+    const labels = await invoke('project_editor_windows');
+    const request = crypto.randomUUID();
+    const pending = new Set(labels);
+    let unlisten, timer;
+    try {
+        await new Promise(async (resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('編集内容の同期を確認できませんでした。実行を中止しました。')), 10000);
+            try {
+                unlisten = await listen('task-save-ready', ({ payload }) => {
+                    if (payload.request !== request) return;
+                    if (payload.error) { reject(new Error(payload.error)); return; }
+                    pending.delete(payload.label);
+                    if (!pending.size) resolve();
+                });
+                await Promise.all(labels.map(label => window.__TAURI__.event.emitTo(label, 'prepare-task-save', { request, sender: win.label })));
+                if (!pending.size) resolve();
+            } catch (e) { reject(e); }
+        });
+    } finally { clearTimeout(timer); unlisten?.(); }
+}
+
+await listen('show-task-log-requested', () => showTaskLog({ invoke, status, openInApp: openTaskOutputInApp }));
+
+async function openTaskOutputInApp(path) {
+    await prepareTaskExecution();
+    const output = await invoke('prepare_task_output', { path });
+    const existing = tabs.find(tab => tab.path === output.path && tab.kind === output.kind
+        || output.doc && tab.kind === 'text' && tab.doc?.path === output.doc.path);
+    if (existing) {
+        if (output.doc) existing.doc = output.doc;
+        active = existing;
+        render();
+    } else {
+        addTab({ kind: output.kind, path: output.path, title: output.path.split('/').at(-1),
+            ...(output.doc ? { doc: output.doc } : {}),
+            ...(output.kind === 'html' ? { folder: output.path.split('/').slice(0, -1).join('/') } : {}) });
+    }
+}

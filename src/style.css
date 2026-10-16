@@ -121,3 +121,20 @@ body.focus-mode > footer {
 #status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .close{display:inline-block;width:1em;text-align:center;flex-shrink:0}
+
+#tasks-dialog { width: min(640px, 90vw); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid #cbd4cd; border-radius: 8px; color: #303b38; background: #f4f3ee; }
+#tasks-dialog h2 { margin-top: 0; }
+#tasks-dialog fieldset { border: 1px solid #cbd4cd; border-radius: 6px; padding: 14px; margin: 12px 0; }
+#tasks-dialog label { display: block; margin-bottom: 12px; }
+#tasks-dialog input { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 8px; font: inherit; user-select: text; }
+#tasks-dialog .task-command { font-family: monospace; }
+#tasks-dialog .task-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#tasks-dialog [role="alert"] { color: #a13d36; white-space: pre-wrap; }
+
+#run-task-dialog { width: min(680px, 90vw); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid #cbd4cd; border-radius: 8px; color: #303b38; background: #f4f3ee; }
+#run-task-dialog select { display: block; width: 100%; margin-top: 8px; padding: 8px; font: inherit; }
+#run-task-dialog .task-command, #run-task-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-family: monospace; }
+#run-task-dialog pre { max-height: 40vh; overflow: auto; background: white; padding: 12px; }
+#run-task-dialog .task-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#tasks-dialog .task-default { display: flex; align-items: center; gap: 8px; }
+#tasks-dialog .task-default input { display: inline-block; width: auto; margin: 0; }

@@ -34,7 +34,224 @@ struct Doc {
 #[derive(Default, Serialize, Deserialize)]
 struct Config {
     version: u32,
+    #[serde(default)]
     dashboards: HashMap<String, Option<String>>,
+    #[serde(default)]
+    tasks: Vec<NamedTask>,
+    #[serde(default)]
+    default_task: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct NamedTask {
+    id: String,
+    label: String,
+    command: String,
+    #[serde(default)]
+    output: String,
+    #[serde(default)]
+    auto_open: bool,
+    #[serde(default)]
+    open_external: bool,
+}
+fn validate_tasks(tasks: &[NamedTask]) -> Result<()> {
+    let mut ids = std::collections::HashSet::new();
+    let mut labels = std::collections::HashSet::new();
+    for task in tasks {
+        if task.id.trim().is_empty() || task.label.trim().is_empty() || task.command.trim().is_empty() {
+            return Err("名前とコマンドを入力してください".into());
+        }
+        if !task.output.is_empty() { validate_output_path(&task.output)?; }
+        if task.auto_open && task.output.is_empty() { return Err("自動で開く成果物のパスを入力してください".into()); }
+        if !ids.insert(&task.id) || !labels.insert(task.label.trim()) {
+            return Err("コマンドの名前とIDは重複できません".into());
+        }
+    }
+    Ok(())
+}
+fn validate_output_path(path: &str) -> Result<()> {
+    if path.trim().is_empty() || Path::new(path).is_absolute()
+        || Path::new(path).components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err("成果物はプロジェクト内の相対パスで指定してください".into());
+    }
+    Ok(())
+}
+fn task_output_path(root: &str, path: &str) -> Result<PathBuf> {
+    validate_output_path(path)?;
+    let resolved = scoped(root, path).map_err(|e| format!("成果物が見つからないか、開けません: {path}\n{e}"))?;
+    if !resolved.is_file() { return Err(format!("成果物がファイルではありません: {path}")); }
+    Ok(resolved)
+}
+#[derive(Serialize)]
+struct InternalTaskOutput { path: String, kind: String, doc: Option<Doc> }
+fn load_task_output(root: &str, path: &str, docs: &mut HashMap<String, Doc>) -> Result<InternalTaskOutput> {
+    let resolved = task_output_path(root, path)?;
+    let key = resolved.to_string_lossy().into_owned();
+    if docs.get(&key).is_some_and(|doc| doc.text != doc.original) {
+        return Err("成果物に未保存の編集があります。保存または編集内容を保管してから開いてください".into());
+    }
+    let ext = resolved.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
+    let kind = match ext.as_str() {
+        "pdf" => "pdf",
+        "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp" => "image",
+        "html" | "htm" => "html",
+        "txt" | "md" | "markdown" | "mmd" | "css" | "js" | "json" | "csv" | "log" | "yaml" | "yml" | "xml" | "tex" => "text",
+        _ => return Err("このファイル形式はアプリ内で表示できません。コマンド設定で「既定の外部アプリで開く」を選んでください".into()),
+    };
+    let doc = if kind == "text" { Some(read_document_from_disk(docs, &resolved, key)?) } else { None };
+    let root = Path::new(root).canonicalize().map_err(|e| e.to_string())?;
+    let relative = resolved.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    Ok(InternalTaskOutput { path: relative, kind: kind.into(), doc })
+}
+#[tauri::command]
+fn prepare_task_output(window: WebviewWindow, app: tauri::AppHandle, state: State<Mutex<Store>>, path: String) -> Result<InternalTaskOutput> {
+    let root = session(&window, &state)?.root;
+    let result = load_task_output(&root, &path, &mut lock(&state).docs)?;
+    if let Some(doc) = &result.doc { app.emit("document-changed", doc).map_err(|e| e.to_string())?; }
+    Ok(result)
+}
+#[tauri::command]
+async fn open_task_output(window: WebviewWindow, state: State<'_, Mutex<Store>>, path: String) -> Result<()> {
+    let root = session(&window, &state)?.root;
+    let resolved = task_output_path(&root, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = std::process::Command::new("/usr/bin/open").arg(resolved).output().map_err(|e| e.to_string())?;
+        if output.status.success() { Ok(()) } else {
+            Err(format!("成果物を開けませんでした: {}", String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn get_named_tasks(window: WebviewWindow, state: State<Mutex<Store>>) -> Result<Vec<NamedTask>> {
+    let s = session(&window, &state)?;
+    Ok(config(&s.root)?.tasks)
+}
+fn default_task_id(config: &Config) -> Option<&str> {
+    config.default_task.as_deref().filter(|id| config.tasks.iter().any(|task| task.id == *id))
+        .or_else(|| config.tasks.first().map(|task| task.id.as_str()))
+}
+#[derive(Serialize)]
+struct TaskSettings { tasks: Vec<NamedTask>, default_task: Option<String> }
+#[tauri::command]
+fn get_named_task_settings(window: WebviewWindow, state: State<Mutex<Store>>) -> Result<TaskSettings> {
+    let c = config(&session(&window, &state)?.root)?;
+    Ok(TaskSettings { tasks: c.tasks, default_task: c.default_task })
+}
+#[tauri::command]
+fn save_named_tasks(window: WebviewWindow, app: tauri::AppHandle, state: State<Mutex<Store>>, tasks: Vec<NamedTask>, expected: Vec<NamedTask>, default_task: Option<String>, expected_default_task: Option<String>) -> Result<()> {
+    // Serialize config changes across project windows, including dashboard changes.
+    let store = lock(&state);
+    let s = store.sessions.get(window.label()).ok_or("プロジェクトが未選択です")?;
+    validate_tasks(&tasks)?;
+    let mut c = config(&s.root)?;
+    if c.tasks != expected || c.default_task != expected_default_task { return Err("登録内容が別の場所で変更されました。閉じて開き直してください".into()); }
+    c.tasks = tasks;
+    c.default_task = default_task;
+    c.default_task = default_task_id(&c).map(str::to_owned);
+    write_config(&s.root, &c)?;
+    drop(store);
+    refresh_task_menu(app)
+}
+#[tauri::command]
+fn refresh_task_menu(app: tauri::AppHandle) -> Result<()> {
+    use tauri::menu::{MenuItem, MenuItemKind, PredefinedMenuItem};
+    let Some(MenuItemKind::Submenu(menu)) = app.menu().and_then(|m| m.get("work-menu")) else { return Ok(()); };
+    let focused = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false));
+    let project = focused.as_ref().and_then(|w| {
+        let state = app.state::<Mutex<Store>>();
+        let store = lock(&state);
+        store.sessions.get(w.label()).map(|s| (w.label().to_string(), s.root.clone()))
+    });
+    let c = match &project { Some((_, root)) => config(root)?, None => Config::default() };
+    let default_id = default_task_id(&c);
+    let tasks = &c.tasks;
+    for item in menu.items().map_err(|e| e.to_string())? {
+        menu.remove(&item).map_err(|e| e.to_string())?;
+    }
+    if let Some((label, _)) = &project {
+        for task in tasks {
+            let id = format!("named-task:{}", serde_json::to_string(&(label, &task.id)).map_err(|e| e.to_string())?);
+            let accelerator = if Some(task.id.as_str()) == default_id { Some("CmdOrCtrl+B") } else { None };
+            let item = MenuItem::with_id(&app, id, &task.label, true, accelerator).map_err(|e| e.to_string())?;
+            menu.append(&item).map_err(|e| e.to_string())?;
+        }
+    }
+    if tasks.is_empty() {
+        let text = if project.is_some() { "登録されたコマンドはありません" } else { "プロジェクトを開いてください" };
+        let item = MenuItem::with_id(&app, "no-tasks", text, false, None::<&str>).map_err(|e| e.to_string())?;
+        menu.append(&item).map_err(|e| e.to_string())?;
+    }
+    menu.append(&PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let manage = MenuItem::with_id(&app, "manage-tasks", "コマンドを登録・編集…", project.is_some(), None::<&str>).map_err(|e| e.to_string())?;
+    menu.append(&manage).map_err(|e| e.to_string())?;
+    let log = MenuItem::with_id(&app, "show-task-log", "直近のコマンドログを確認…", project.is_some(), None::<&str>).map_err(|e| e.to_string())?;
+    menu.append(&log).map_err(|e| e.to_string())?;
+    Ok(())
+}
+#[derive(Serialize)]
+struct TaskResult {
+    success: bool,
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    output: String,
+    auto_open: bool,
+    open_external: bool,
+    output_error: Option<String>,
+}
+fn execute_named_task(root: &str, id: &str) -> Result<TaskResult> {
+    let task = config(root)?.tasks.into_iter().find(|task| task.id == id)
+        .ok_or("登録されたコマンドが見つかりません")?;
+    let output = std::process::Command::new("/bin/zsh")
+        .args(["-lic", &task.command])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output().map_err(|e| format!("コマンドを実行できません: {e}"))?;
+    let output_error = if task.output.is_empty() { None } else { task_output_path(root, &task.output).err() };
+    Ok(TaskResult {
+        output: task.output, auto_open: task.auto_open, open_external: task.open_external, output_error,
+        success: output.status.success(), code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+#[tauri::command]
+async fn run_named_task(window: WebviewWindow, app: tauri::AppHandle, state: State<'_, Mutex<Store>>, id: String) -> Result<TaskResult> {
+    let root = session(&window, &state)?.root;
+    {
+        let mut store = lock(&state);
+        save_project_documents(&root, &mut store, |doc| {
+            app.emit("document-changed", doc).map_err(|e| e.to_string())
+        })?;
+    }
+    tauri::async_runtime::spawn_blocking(move || execute_named_task(&root, &id))
+        .await.map_err(|e| e.to_string())?
+}
+fn save_project_documents(root: &str, store: &mut Store, mut notify: impl FnMut(&Doc) -> Result<()>) -> Result<()> {
+    let mut paths: Vec<_> = store.docs.values()
+        .filter(|d| Path::new(&d.path).starts_with(root) && d.text != d.original)
+        .map(|d| d.path.clone()).collect();
+    paths.sort();
+    for path in paths {
+        let d = store.docs.get_mut(&path).unwrap();
+        let saved_path = scoped(root, &path).map_err(|e| format!("保存できません: {path}\n{e}"))?;
+        save_doc_to_disk(&saved_path, d).map_err(|e| format!("保存できません: {path}\n{e}"))?;
+        notify(d)?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn project_editor_windows(window: WebviewWindow, state: State<Mutex<Store>>) -> Result<Vec<String>> {
+    let root = session(&window, &state)?.root;
+    Ok(lock(&state).sessions.iter().filter(|(_, s)| s.root == root).map(|(label, _)| label.clone()).collect())
+}
+fn save_doc_to_disk(path: &Path, d: &mut Doc) -> Result<()> {
+    let disk = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    if disk != d.original {
+        return Err("ファイルが外部で変更されています。上書きせずに停止しました。編集内容をコピーしてからファイルを開き直してください".into());
+    }
+    atomic_write(path, d.text.as_bytes())?;
+    d.original = d.text.clone();
+    Ok(())
 }
 #[derive(Serialize)]
 struct Entry {
@@ -637,12 +854,7 @@ fn save_document(
         .docs
         .get_mut(&p.to_string_lossy().into_owned())
         .ok_or("ファイルが開かれていません")?;
-    let disk = fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    if disk != d.original {
-        return Err("ファイルが外部で変更されています。上書きせずに停止しました。編集内容をコピーしてからファイルを開き直してください".into());
-    }
-    atomic_write(&p, d.text.as_bytes())?;
-    d.original = d.text.clone();
+    save_doc_to_disk(&p, d)?;
     let result = d.clone();
     app.emit("document-changed", &result)
         .map_err(|e| e.to_string())?;
@@ -903,7 +1115,13 @@ fn main() {
             let progress = MenuItem::with_id(app,"record-progress","進捗を記録…",true,Some("CmdOrCtrl+K"))?;
             let welcome = MenuItem::with_id(app,"open-welcome","ウェルカムページを開く",true,None::<&str>)?;
             let recent = SubmenuBuilder::with_id(app,"recent-projects","最近使ったプロジェクト").build()?;
-            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&welcome).item(&open_project).item(&recent).item(&save).separator().close_window().build()?;
+            let close_tab = MenuItem::with_id(app,"close-tab","タブを閉じる",true,Some("CmdOrCtrl+W"))?;
+            let close_window = MenuItem::with_id(app,"close-project-window","ウィンドウを閉じる",true,Some("CmdOrCtrl+Shift+W"))?;
+            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&welcome).item(&open_project).item(&recent).item(&save).separator().item(&close_tab).item(&close_window).build()?;
+            let no_tasks = MenuItem::with_id(app,"no-tasks","プロジェクトを開いてください",false,None::<&str>)?;
+            let tasks = MenuItem::with_id(app,"manage-tasks","コマンドを登録・編集…",true,None::<&str>)?;
+            let task_log = MenuItem::with_id(app,"show-task-log","直近のコマンドログを確認…",false,None::<&str>)?;
+            let work = SubmenuBuilder::with_id(app,"work-menu","作業").item(&no_tasks).separator().item(&tasks).item(&task_log).build()?;
             let history = SubmenuBuilder::with_id(app,"history-menu","履歴").item(&progress).build()?;
             let inspect = MenuItem::with_id(app,"toggle-devtools","開発者ツールの表示／非表示",true,Some("CmdOrCtrl+Alt+I"))?;
             let focus = MenuItem::with_id(app,"toggle-focus-mode","全集中モード",true,Some("CmdOrCtrl+Alt+F"))?;
@@ -916,9 +1134,18 @@ fn main() {
             let next_tab = MenuItem::with_id(app,"tab-next","次のタブ",true,Some("CmdOrCtrl+Alt+Right"))?;
             let navigation = SubmenuBuilder::new(app,"移動").item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
             let view = SubmenuBuilder::new(app,"表示").item(&increase).item(&decrease).item(&reset).separator().item(&focus).separator().item(&inspect).build()?;
-            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&view,&navigation]).build()
+            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&view,&navigation]).build()
         })
         .on_menu_event(|app,event| {
+            if let Some(encoded) = event.id().as_ref().strip_prefix("named-task:") {
+                if let Ok((label, id)) = serde_json::from_str::<(String, String)>(encoded) {
+                    if let Some(window) = app.get_webview_window(&label).filter(|w| w.is_focused().unwrap_or(false)) {
+                        let _ = window.emit("run-task-requested", id);
+                    }
+                }
+                return;
+            }
+
             if event.id().as_ref() == "open-welcome" {
                 let state = app.state::<Mutex<Store>>();
                 if let Err(error) = open_welcome(app.clone(), state) { let _ = app.emit("history-error", error); }
@@ -939,11 +1166,16 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "open-project" | "save-document" | "record-progress" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "record-progress" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
                     let name = match event.id().as_ref() {
+                        "show-task-log" => "show-task-log-requested",
+                        "close-tab" => "close-tab-requested",
+                        "close-project-window" => "close-window-requested",
+                        "run-task" => "run-task-requested",
+                        "manage-tasks" => "manage-tasks-requested",
                         "save-document" => "save-requested",
                         "record-progress" => "record-progress-requested",
                         "toggle-focus-mode" => "focus-mode-requested",
@@ -996,7 +1228,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -1037,6 +1269,139 @@ fn decode(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn internal_outputs_reload_clean_documents_and_preserve_unsaved_edits() {
+        let dir = std::env::temp_dir().join(format!("writingroom-internal-output-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_str().unwrap();
+        let mut docs = HashMap::new();
+        let file = dir.join("book.md");
+        fs::write(&file, "first").unwrap();
+        let first = load_task_output(root, "./book.md", &mut docs).unwrap();
+        assert_eq!(first.path, "book.md");
+        assert_eq!(first.kind, "text");
+        let doc = first.doc.unwrap();
+        fs::write(&file, "second").unwrap();
+        let updated = load_task_output(root, "book.md", &mut docs).unwrap().doc.unwrap();
+        assert_eq!(updated.text, "second");
+        assert!(updated.revision > doc.revision);
+        docs.get_mut(&doc.path).unwrap().text = "unsaved".into();
+        assert!(load_task_output(root, "book.md", &mut docs).is_err());
+        assert_eq!(docs[&doc.path].text, "unsaved");
+        assert_eq!(fs::read_to_string(file).unwrap(), "second");
+        for (name, kind) in [("book.pdf", "pdf"), ("book.html", "html"), ("cover.png", "image")] {
+            fs::write(dir.join(name), "data").unwrap();
+            let result = load_task_output(root, name, &mut docs).unwrap();
+            assert_eq!(result.kind, kind);
+            assert!(result.doc.is_none());
+        }
+        fs::write(dir.join("book.epub"), "data").unwrap();
+        assert!(load_task_output(root, "book.epub", &mut docs).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn task_outputs_are_optional_and_stay_inside_project() {
+        let task: NamedTask = serde_json::from_str(r#"{"id":"pdf","label":"PDF","command":"make"}"#).unwrap();
+        assert!(task.output.is_empty());
+        assert!(!task.auto_open);
+        assert!(!task.open_external);
+        assert!(validate_tasks(&[NamedTask { auto_open: true, ..task.clone() }]).is_err());
+        for path in ["/tmp/book.pdf", "../book.pdf", "Build/../../book.pdf"] {
+            assert!(validate_tasks(&[NamedTask { output: path.into(), ..task.clone() }]).is_err());
+        }
+        let configured = NamedTask { output: "Build/book.pdf".into(), auto_open: true, open_external: true, ..task };
+        validate_tasks(&[configured.clone()]).unwrap();
+        let saved: NamedTask = serde_json::from_str(&serde_json::to_string(&configured).unwrap()).unwrap();
+        assert_eq!(saved, configured);
+        let dir = std::env::temp_dir().join(format!("writingroom-output-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let root = dir.join("project");
+        fs::create_dir_all(root.join("Build")).unwrap();
+        fs::write(root.join("Build/book.pdf"), "pdf").unwrap();
+        let root_str = root.to_str().unwrap();
+        assert!(task_output_path(root_str, "Build/book.pdf").is_ok());
+        assert!(task_output_path(root_str, "missing.pdf").is_err());
+        assert!(task_output_path(root_str, "Build").is_err());
+        #[cfg(unix)] {
+            fs::write(dir.join("outside.pdf"), "outside").unwrap();
+            std::os::unix::fs::symlink(dir.join("outside.pdf"), root.join("linked.pdf")).unwrap();
+            assert!(task_output_path(root_str, "linked.pdf").is_err());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn default_task_selection_falls_back_and_roundtrips() {
+        let mut c: Config = serde_json::from_str(r#"{"version":1,"tasks":[{"id":"pdf","label":"PDF","command":"make pdf"}]}"#).unwrap();
+        assert_eq!(default_task_id(&c), Some("pdf"));
+        c.tasks.push(NamedTask { id: "html".into(), label: "HTML".into(), command: "make html".into(), ..Default::default() });
+        assert_eq!(default_task_id(&c), Some("pdf"));
+        c.default_task = Some("html".into());
+        let saved: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(default_task_id(&saved), Some("html"));
+        c.tasks.pop();
+        assert_eq!(default_task_id(&c), Some("pdf"));
+        c.tasks.clear();
+        assert_eq!(default_task_id(&c), None);
+    }
+    #[test]
+    fn task_save_includes_shared_documents_and_stops_on_external_changes() {
+        let dir = std::env::temp_dir().join(format!("writingroom-task-save-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_str().unwrap();
+        let path = dir.join("chapter.md");
+        fs::write(&path, "before").unwrap();
+        let key = path.to_string_lossy().into_owned();
+        let mut store = Store::default();
+        store.docs.insert(key.clone(), Doc { path: key.clone(), text: "after".into(), original: "before".into(), revision: 2 });
+        store.docs.insert("/unrelated/chapter.md".into(), Doc { path: "/unrelated/chapter.md".into(), text: "changed".into(), original: "old".into(), revision: 1 });
+        let mut notifications = Vec::new();
+        save_project_documents(root, &mut store, |d| { notifications.push(d.clone()); Ok(()) }).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "after");
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(store.docs[&key].original, "after");
+        store.docs.get_mut(&key).unwrap().text = "next".into();
+        fs::write(&path, "external").unwrap();
+        assert!(save_project_documents(root, &mut store, |_| Ok(())).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+        assert_eq!(store.docs[&key].original, "after");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn named_task_execution_uses_project_directory_and_reports_failure() {
+        let dir = std::env::temp_dir().join(format!("writingroom-task-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("source.txt"), "原稿").unwrap();
+        let root = dir.to_str().unwrap();
+        let mut c = config(root).unwrap();
+        c.tasks = vec![
+            NamedTask { id: "ok".into(), label: "成功".into(), command: "cat source.txt".into(), ..Default::default() },
+            NamedTask { id: "fail".into(), label: "失敗".into(), command: "printf error >&2; exit 7".into(), ..Default::default() },
+        ];
+        write_config(root, &c).unwrap();
+        let output = execute_named_task(root, "ok").unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout, "原稿");
+        let output = execute_named_task(root, "fail").unwrap();
+        assert!(!output.success);
+        assert_eq!(output.code, Some(7));
+        assert_eq!(output.stderr, "error");
+        assert!(execute_named_task(root, "missing").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn named_tasks_compatibility_validation_and_roundtrip() {
+        let mut old: Config = serde_json::from_str(r#"{"version":1,"dashboards":{"":"index.html"}}"#).unwrap();
+        assert!(old.tasks.is_empty());
+        let task = NamedTask { id: "pdf".into(), label: "PDFを作る".into(), command: "make pdf".into(), ..Default::default() };
+        old.tasks.push(task.clone());
+        validate_tasks(&old.tasks).unwrap();
+        let loaded: Config = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+        assert_eq!(loaded.tasks, vec![task.clone()]);
+        assert_eq!(loaded.dashboards.get(""), Some(&Some("index.html".into())));
+        assert!(validate_tasks(&[task.clone(), task.clone()]).is_err());
+        assert!(validate_tasks(&[NamedTask { id: "other".into(), command: "  ".into(), ..task.clone() }]).is_err());
+        assert!(validate_tasks(&[task.clone(), NamedTask { id: "other".into(), label: " PDFを作る ".into(), ..task }]).is_err());
+        validate_tasks(&[]).unwrap();
+    }
     #[test]
     fn numbered_creation_preserves_existing_files_and_project_boundary() {
         let dir = std::env::temp_dir().join(format!("writingroom-numbered-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
