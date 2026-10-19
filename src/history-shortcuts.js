@@ -7,23 +7,36 @@ export function createHistoryShortcuts({ getContext, waiting, record, history })
         context = null;
         waiting(false);
     };
+    const keyIdentity = event => event.code || event.key.toLowerCase();
     const consume = event => {
-        consumedKey = event.key.toLowerCase();
+        consumedKey = keyIdentity(event);
         event.preventDefault();
         event.stopImmediatePropagation();
     };
     return {
         cancel,
         handleKeyup(event) {
-            if (event.key.toLowerCase() === consumedKey) consumedKey = null;
+            if (keyIdentity(event) === consumedKey) consumedKey = null;
         },
         handleKeydown(event) {
-            if (event.isComposing || event.keyCode === 229) { cancel(); return; }
-            const key = event.key.toLowerCase();
-            if (event.repeat && key === consumedKey) { consume(event); return; }
-            if (!event.repeat) consumedKey = null;
             const current = getContext();
             if (context && current !== context) cancel();
+            const key = event.key.toLowerCase();
+            // During an explicitly requested chord, recognize physical K/L even
+            // when the IME reports Process/229 or marks this stroke as composing.
+            const stroke = event.code === 'KeyK' ? 'k' : event.code === 'KeyL' ? 'l' : key;
+            if (event.repeat && keyIdentity(event) === consumedKey) { consume(event); return; }
+            if (!event.repeat) consumedKey = null;
+            if (context && !event.altKey && !event.shiftKey && (stroke === 'k' || stroke === 'l')) {
+                consume(event);
+                if (event.repeat) return;
+                const target = context;
+                cancel();
+                if (stroke === 'k') record(target);
+                else history(target);
+                return;
+            }
+            if (event.isComposing || event.keyCode === 229) { cancel(); return; }
             if (!context) {
                 if (!current || event.defaultPrevented || event.altKey || event.shiftKey ||
                     !(event.metaKey || event.ctrlKey) || key !== 'k') return;
@@ -36,14 +49,6 @@ export function createHistoryShortcuts({ getContext, waiting, record, history })
             if (['Meta', 'Control', 'Shift', 'Alt'].includes(event.key)) return;
             if (event.repeat) { consume(event); return; }
             if (key === 'escape') { consume(event); cancel(); return; }
-            if (!event.altKey && !event.shiftKey && (key === 'k' || key === 'l')) {
-                consume(event);
-                const target = context;
-                cancel();
-                if (key === 'k') record(target);
-                else history(target);
-                return;
-            }
             cancel();
             // Let unrelated shortcuts (e.g. Save) work normally; consume an
             // unassigned plain second stroke so it cannot alter the manuscript.

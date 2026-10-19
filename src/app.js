@@ -1,3 +1,4 @@
+import { createChordInput } from './chord-input.js';
 import { createHistoryShortcuts } from './history-shortcuts.js';
 import { showHistory } from './history.js';
 import { showTaskLog, runNamedTask, manageNamedTasks } from './named-tasks.js';
@@ -51,6 +52,7 @@ const status = (text, error = false) => { const el = document.querySelector('#st
 const fail = error => { status(String(error), true); return message(String(error), { title: 'Writing Room', kind: 'error' }); };
 const chordHint = 'K：この原稿を記録 ／ L：この原稿の履歴 ／ Esc：キャンセル';
 let statusBeforeChord;
+const chordInput = createChordInput(document);
 const historyShortcuts = createHistoryShortcuts({
     getContext: () => session && active?.kind === 'text' && !active.savingDraft &&
         !document.querySelector('dialog[open]') ? active : null,
@@ -60,7 +62,11 @@ const historyShortcuts = createHistoryShortcuts({
         if (enabled) {
             statusBeforeChord = { text: el.textContent, error: el.classList.contains('error') };
             status(chordHint);
-        } else if (el.textContent === chordHint) status(statusBeforeChord.text, statusBeforeChord.error);
+            chordInput.begin();
+        } else {
+            chordInput.end();
+            if (el.textContent === chordHint) status(statusBeforeChord.text, statusBeforeChord.error);
+        }
     },
     record: tab => recordCurrentProgress(tab),
     history: tab => {

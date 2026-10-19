@@ -159,3 +159,6 @@ body.focus-mode.history-chord-pending > footer {
     margin-bottom: 0;
     transition: none;
 }
+
+/* Focusable, non-editable target for the second stroke; never a text field. */
+.chord-input { position: fixed; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }

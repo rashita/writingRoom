@@ -60,4 +60,29 @@ prefix(); prefix({ repeat: true });
 assert.equal(actions(), count, 'holding the prefix must not record');
 key('l');
 assert.equal(actions(), count + 1);
+// IME flags only bypass the guard for K/L in an existing chord.
+for (const [code, action] of [['KeyK', 'record'], ['KeyL', 'history']]) {
+    for (const metaKey of [false, true]) {
+        prefix();
+        const stroke = key('Process', { code, keyCode: 229, isComposing: true, metaKey });
+        assert.equal(stroke.defaultPrevented, true);
+        assert.equal(stroke.stopped, true);
+        assert.deepEqual(calls.at(-1), [action, target]);
+        const total = actions();
+        assert.equal(key('Process', { code, keyCode: 229, isComposing: true, repeat: true }).defaultPrevented, true);
+        assert.equal(actions(), total);
+        shortcuts.handleKeyup({ key: 'Process', code });
+        assert.equal(key('Process', { code, keyCode: 229, isComposing: true }).defaultPrevented, false,
+            'ordinary Japanese input is untouched outside a chord');
+    }
+}
+prefix();
+key('Process', { code: 'KeyX', keyCode: 229, isComposing: true });
+const before = actions();
+key('l');
+assert.equal(actions(), before, 'unrelated IME input still cancels waiting');
+prefix();
+context = { path: 'another.md' };
+assert.equal(key('Process', { code: 'KeyL', keyCode: 229, isComposing: true }).defaultPrevented, false);
+assert.equal(actions(), before, 'IME stroke cannot act on a different tab');
 console.log('History chord shortcuts, cancellation, IME, and repeat checks passed');
