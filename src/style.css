@@ -150,3 +150,12 @@ body.focus-mode > footer {
 .history-detail{display:flex;flex-direction:column;min-height:0;padding:16px;overflow:auto}.history-meta{font-size:12px;color:#718078;margin:0 0 10px;overflow-wrap:anywhere}.history-message{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:0 0 16px;flex-shrink:0;user-select:text}
 .history-diff{flex:1;min-height:120px;overflow:auto;margin:0;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:4;user-select:text}.history-diff span{display:block;white-space:pre-wrap;overflow-wrap:anywhere}.history-added{background:#edf7ee;color:#25603b}.history-removed{background:#fff0ed;color:#973e35}.history-hunk{color:#46728b;background:#eff5f8}
 @media(max-width:640px){.history-layout{grid-template-columns:1fr;grid-template-rows:35% 65%}.history-list{border-right:0;border-bottom:1px solid #d8ded8}}
+
+/* Show the chord hint temporarily even while focus mode hides the footer. */
+body.focus-mode.history-chord-pending > footer {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    margin-bottom: 0;
+    transition: none;
+}

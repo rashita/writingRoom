@@ -1122,7 +1122,7 @@ fn main() {
             let open_project = MenuItem::with_id(app,"open-project","プロジェクトを開く…",true,Some("CmdOrCtrl+O"))?;
             let save = MenuItem::with_id(app,"save-document","保存",true,Some("CmdOrCtrl+S"))?;
             let track = MenuItem::with_id(app,"track-document","このファイルを追跡に追加",true,None::<&str>)?;
-            let progress = MenuItem::with_id(app,"record-progress","この原稿を記録…",true,Some("CmdOrCtrl+K"))?;
+            let progress = MenuItem::with_id(app,"record-progress","この原稿を記録…（⌘K → K）",true,None::<&str>)?;
             let new_document = MenuItem::with_id(app,"new-document","新しい原稿",true,Some("CmdOrCtrl+N"))?;
             let new_window = MenuItem::with_id(app,"new-window","新しいウィンドウ",true,Some("CmdOrCtrl+Shift+N"))?;
             let welcome = MenuItem::with_id(app,"open-welcome","ウェルカムページを開く",true,None::<&str>)?;
@@ -1135,7 +1135,7 @@ fn main() {
             let task_log = MenuItem::with_id(app,"show-task-log","直近のコマンドログを確認…",false,None::<&str>)?;
             let work = SubmenuBuilder::with_id(app,"work-menu","作業").item(&no_tasks).separator().item(&tasks).item(&task_log).build()?;
             let project_progress = MenuItem::with_id(app,"record-project-progress","プロジェクトを記録…",true,None::<&str>)?;
-            let document_history = MenuItem::with_id(app,"show-document-history","この原稿の履歴…",true,None::<&str>)?;
+            let document_history = MenuItem::with_id(app,"show-document-history","この原稿の履歴…（⌘K → L）",true,None::<&str>)?;
             let project_history = MenuItem::with_id(app,"show-project-history","プロジェクトの履歴…",true,None::<&str>)?;
             let history = SubmenuBuilder::with_id(app,"history-menu","履歴").item(&track).item(&progress).item(&project_progress).separator().item(&document_history).item(&project_history).build()?;
             let inspect = MenuItem::with_id(app,"toggle-devtools","開発者ツールの表示／非表示",true,Some("CmdOrCtrl+Alt+I"))?;

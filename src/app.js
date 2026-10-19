@@ -1,3 +1,4 @@
+import { createHistoryShortcuts } from './history-shortcuts.js';
 import { showHistory } from './history.js';
 import { showTaskLog, runNamedTask, manageNamedTasks } from './named-tasks.js';
 import { recordProgress } from './progress.js';
@@ -48,6 +49,31 @@ async function flushTabState() {
 }
 const status = (text, error = false) => { const el = document.querySelector('#status'); el.textContent = text; el.classList.toggle('error', error); };
 const fail = error => { status(String(error), true); return message(String(error), { title: 'Writing Room', kind: 'error' }); };
+const chordHint = 'K：この原稿を記録 ／ L：この原稿の履歴 ／ Esc：キャンセル';
+let statusBeforeChord;
+const historyShortcuts = createHistoryShortcuts({
+    getContext: () => session && active?.kind === 'text' && !active.savingDraft &&
+        !document.querySelector('dialog[open]') ? active : null,
+    waiting(enabled) {
+        const el = document.querySelector('#status');
+        document.body.classList.toggle('history-chord-pending', enabled);
+        if (enabled) {
+            statusBeforeChord = { text: el.textContent, error: el.classList.contains('error') };
+            status(chordHint);
+        } else if (el.textContent === chordHint) status(statusBeforeChord.text, statusBeforeChord.error);
+    },
+    record: tab => recordCurrentProgress(tab),
+    history: tab => {
+        if (tab.untitled) { status('履歴を確認するには、原稿を保存してください。', true); return; }
+        showHistory({ path: tab.path, invoke }).catch(fail);
+    }
+});
+window.addEventListener('keydown', historyShortcuts.handleKeydown, true);
+window.addEventListener('keyup', historyShortcuts.handleKeyup, true);
+window.addEventListener('blur', historyShortcuts.cancel);
+window.addEventListener('pointerdown', historyShortcuts.cancel, true);
+window.addEventListener('compositionstart', historyShortcuts.cancel, true);
+document.addEventListener('visibilitychange', () => { if (document.hidden) historyShortcuts.cancel(); });
 const button = (label, action) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => Promise.resolve().then(action).catch(fail); return b; };
 function addTab(tab) { const existing = tabs.find(t => t.kind === tab.kind && t.path === tab.path && !!t.untitled === !!tab.untitled); if (existing) {
     active = existing;
@@ -182,7 +208,7 @@ function focusEditor() {
     editor.scrollTop = scrollTop;
     editor.scrollLeft = scrollLeft;
 }
-function render() { rememberEditorPosition(); rememberEditorPosition = () => {}; focusMode.sync(); renderTabs(); content.replaceChildren(); updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null); if (!active) {
+function render() { historyShortcuts.cancel(); rememberEditorPosition(); rememberEditorPosition = () => {}; focusMode.sync(); renderTabs(); content.replaceChildren(); updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null); if (!active) {
     const box = document.createElement('div');
     box.className = 'welcome';
     const h = document.createElement('h1');
@@ -482,10 +508,10 @@ await listen('record-project-progress-requested', async () => {
         await recordProgress({ invoke, status, project: true });
     } catch (error) { fail(error); }
 });
-await listen('record-progress-requested', async () => {
+async function recordCurrentProgress(tab = active) {
     try {
         await editQueue;
-        const tab = active;
+        if (document.querySelector('dialog[open]')) return;
         if (tab?.kind !== 'text') throw new Error('記録する原稿の編集タブを開いてください。');
         if (tab.syncError) throw new Error(tab.syncError);
         if (tab.untitled || tab.doc.text !== tab.doc.original) {
@@ -494,7 +520,8 @@ await listen('record-progress-requested', async () => {
         }
         await recordProgress({ path: tab.path, invoke, status });
     } catch (error) { fail(error); }
-});
+}
+await listen('record-progress-requested', () => recordCurrentProgress());
 await listen('focus-mode-requested', () => focusMode.toggle());
 const applyEditorFontSize = size => {
     document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
