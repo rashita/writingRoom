@@ -1,3 +1,4 @@
+import { showHistory } from './history.js';
 import { showTaskLog, runNamedTask, manageNamedTasks } from './named-tasks.js';
 import { recordProgress } from './progress.js';
 import { createFocusMode } from './focus-mode.js';
@@ -416,6 +417,16 @@ await listen('track-document-requested', async () => {
         status(added ? `${tab.title} を追跡に追加しました。「進捗を記録」でcommitできます` : `${tab.title} はすでに追跡されています`);
     } catch (error) { fail(error); }
 });
+for (const project of [false, true]) {
+    await listen(project ? 'show-project-history-requested' : 'show-document-history-requested', async () => {
+        try {
+            if (document.querySelector('dialog[open]')) return;
+            if (!session) throw new Error('プロジェクトを開いてください。');
+            if (!project && active?.kind !== 'text') throw new Error('履歴を確認する原稿の編集タブを開いてください。');
+            await showHistory({ path: project ? null : active.path, invoke });
+        } catch (error) { fail(error); }
+    });
+}
 await listen('record-project-progress-requested', async () => {
     try {
         if (document.querySelector('dialog[open]')) return;

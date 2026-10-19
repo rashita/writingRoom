@@ -138,3 +138,15 @@ body.focus-mode > footer {
 #run-task-dialog .task-actions { display: flex; justify-content: flex-end; gap: 8px; }
 #tasks-dialog .task-default { display: flex; align-items: center; gap: 8px; }
 #tasks-dialog .task-default input { display: inline-block; width: auto; margin: 0; }
+
+.history-dialog{width:min(1100px,94vw);height:82vh;max-height:90vh;padding:22px;border:1px solid #cbd4cd;border-radius:10px;color:#303b38;background:#f4f3ee}
+.history-dialog::backdrop{background:#172e2444}
+.history-dialog header{display:flex;align-items:start;justify-content:space-between;gap:16px}
+.history-dialog h2{margin:0;font-size:20px}.history-scope{margin:8px 0;color:#718078;overflow-wrap:anywhere}
+.history-error{color:#a13d36;white-space:pre-wrap;overflow-wrap:anywhere}.history-error:empty{display:none}
+.history-layout{display:grid;grid-template-columns:minmax(230px,32%) minmax(0,1fr);height:calc(100% - 90px);border:1px solid #d8ded8;border-radius:6px;overflow:hidden;background:white}
+.history-list{overflow:auto;border-right:1px solid #d8ded8;padding:10px}.history-entries button{display:block;width:100%;text-align:left;margin-bottom:6px;padding:12px;overflow-wrap:anywhere}
+.history-entries button[aria-pressed=true]{background:#e6eee8;border-color:#397459}.history-entries strong{display:block;font-weight:500;line-height:1.6}.history-entries small{display:block;color:#718078;margin-top:6px}.history-state{font-size:12px;color:#718078}
+.history-detail{display:flex;flex-direction:column;min-height:0;padding:16px;overflow:auto}.history-meta{font-size:12px;color:#718078;margin:0 0 10px;overflow-wrap:anywhere}.history-message{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:0 0 16px;flex-shrink:0;user-select:text}
+.history-diff{flex:1;min-height:120px;overflow:auto;margin:0;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:4;user-select:text}.history-diff span{display:block;white-space:pre-wrap;overflow-wrap:anywhere}.history-added{background:#edf7ee;color:#25603b}.history-removed{background:#fff0ed;color:#973e35}.history-hunk{color:#46728b;background:#eff5f8}
+@media(max-width:640px){.history-layout{grid-template-columns:1fr;grid-template-rows:35% 65%}.history-list{border-right:0;border-bottom:1px solid #d8ded8}}

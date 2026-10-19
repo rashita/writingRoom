@@ -109,9 +109,88 @@ pub(crate) fn commit_project_progress(window: WebviewWindow, state: State<Mutex<
     project_commit(Path::new(&root), &expected, &message)
 }
 
+// Browsing history never saves documents or changes the index.
+#[derive(Serialize, Debug)]
+pub(crate) struct HistoryEntry {
+    id: String, short_id: String, date: String, author: String, message: String,
+}
+fn history(dir: &Path, scope: &str, offset: usize) -> Result<Vec<HistoryEntry>> {
+    git(dir, &["rev-parse", "--show-toplevel"])?;
+    if git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() { return Ok(vec![]); }
+    let skip = format!("--skip={offset}");
+    let output = git(dir, &["log", "--encoding=UTF-8", "-z", "--format=%H%x00%h%x00%aI%x00%an%x00%B", "--max-count=50", &skip, "HEAD", "--", scope])?;
+    let fields: Vec<_> = output.split_terminator('\0').collect();
+    Ok(fields.chunks_exact(5).map(|f| HistoryEntry {
+        id: f[0].into(), short_id: f[1].into(), date: f[2].into(), author: f[3].into(), message: f[4].trim_end().into(),
+    }).collect())
+}
+fn history_diff(dir: &Path, scope: &str, id: &str) -> Result<String> {
+    if ![40, 64].contains(&id.len()) || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("記録のIDが不正です".into());
+    }
+    git(dir, &["-c", "core.quotePath=false", "show", "--format=", "--root", "--first-parent", "--patch", "--stat", "--no-ext-diff", "--no-textconv", "--no-color", id, "--", scope])
+}
+fn history_scope(window: &WebviewWindow, state: &Mutex<Store>, path: Option<String>) -> Result<(std::path::PathBuf, String)> {
+    let root = session(window, state)?.root;
+    match path {
+        Some(path) => {
+            let file = scoped(&root, &path)?;
+            Ok((file.parent().ok_or("原稿の場所を取得できません")?.into(), file.file_name().and_then(|s| s.to_str()).ok_or("ファイル名を読み込めません")?.into()))
+        }
+        None => Ok((root.into(), ".".into())),
+    }
+}
+#[tauri::command]
+pub(crate) fn list_progress_history(window: WebviewWindow, state: State<Mutex<Store>>, path: Option<String>, offset: usize) -> Result<Vec<HistoryEntry>> {
+    let (dir, scope) = history_scope(&window, &state, path)?;
+    history(&dir, &scope, offset)
+}
+#[tauri::command]
+pub(crate) fn progress_history_diff(window: WebviewWindow, state: State<Mutex<Store>>, path: Option<String>, id: String) -> Result<String> {
+    let (dir, scope) = history_scope(&window, &state, path)?;
+    history_diff(&dir, &scope, &id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn history_scopes_pages_and_reads_initial_diff_without_changing_staging() {
+        let dir = std::env::temp_dir().join(format!("writingroom-history-{}-{}", std::process::id(), crate::NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&dir, &["init"]).unwrap();
+        git(&dir, &["config", "user.name", "Test"]).unwrap();
+        git(&dir, &["config", "user.email", "test@example.invalid"]).unwrap();
+        assert!(history(&root, ".", 0).unwrap().is_empty());
+        std::fs::write(root.join("原稿 [1].md"), "first\n").unwrap();
+        std::fs::write(dir.join("outside.md"), "outside\n").unwrap();
+        git(&dir, &["add", "."]).unwrap();
+        git(&dir, &["commit", "-m", "初稿", "-m", "本文の説明\n二行目"]).unwrap();
+        let first = history(&root, "原稿 [1].md", 0).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].message.contains("本文の説明\n二行目"));
+        assert!(history_diff(&root, "原稿 [1].md", &first[0].id).unwrap().contains("+first"));
+        assert!(!history_diff(&root, ".", &first[0].id).unwrap().contains("outside.md"));
+        std::fs::write(dir.join("outside.md"), "changed outside\n").unwrap();
+        git(&dir, &["commit", "-am", "outside only"]).unwrap();
+        std::fs::write(root.join("second.md"), "second\n").unwrap();
+        git(&dir, &["add", "."]).unwrap();
+        git(&dir, &["commit", "-m", "second manuscript"]).unwrap();
+        std::fs::write(dir.join("outside.md"), "staged\n").unwrap();
+        git(&dir, &["add", "outside.md"]).unwrap();
+        let staging = git(&dir, &["diff", "--cached"]).unwrap();
+        let entries = history(&root, ".", 0).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].message, "second manuscript");
+        assert_eq!(history(&root, ".", 1).unwrap()[0].id, first[0].id);
+        assert_eq!(history(&root, "原稿 [1].md", 0).unwrap().len(), 1);
+        assert!(history(&root, "untracked.md", 0).unwrap().is_empty());
+        assert!(history_diff(&root, ".", "--output=bad").is_err());
+        assert!(history_diff(&root, ".", &entries[0].id).unwrap().contains("+second"));
+        assert_eq!(git(&dir, &["diff", "--cached"]).unwrap(), staging);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn project_records_additions_changes_deletions_and_preserves_outside_staging() {
         let dir = std::env::temp_dir().join(format!("writingroom-project-{}-{}", std::process::id(), crate::NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));

@@ -1124,7 +1124,9 @@ fn main() {
             let task_log = MenuItem::with_id(app,"show-task-log","直近のコマンドログを確認…",false,None::<&str>)?;
             let work = SubmenuBuilder::with_id(app,"work-menu","作業").item(&no_tasks).separator().item(&tasks).item(&task_log).build()?;
             let project_progress = MenuItem::with_id(app,"record-project-progress","プロジェクトを記録…",true,None::<&str>)?;
-            let history = SubmenuBuilder::with_id(app,"history-menu","履歴").item(&track).item(&progress).item(&project_progress).build()?;
+            let document_history = MenuItem::with_id(app,"show-document-history","この原稿の履歴…",true,None::<&str>)?;
+            let project_history = MenuItem::with_id(app,"show-project-history","プロジェクトの履歴…",true,None::<&str>)?;
+            let history = SubmenuBuilder::with_id(app,"history-menu","履歴").item(&track).item(&progress).item(&project_progress).separator().item(&document_history).item(&project_history).build()?;
             let inspect = MenuItem::with_id(app,"toggle-devtools","開発者ツールの表示／非表示",true,Some("CmdOrCtrl+Alt+I"))?;
             let focus = MenuItem::with_id(app,"toggle-focus-mode","全集中モード",true,Some("CmdOrCtrl+Alt+F"))?;
             let increase = MenuItem::with_id(app,"font-increase","文字を大きくする",true,Some("CmdOrCtrl+="))?;
@@ -1168,7 +1170,7 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "track-document" | "record-progress" | "record-project-progress" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
@@ -1179,6 +1181,8 @@ fn main() {
                         "run-task" => "run-task-requested",
                         "manage-tasks" => "manage-tasks-requested",
                         "save-document" => "save-requested",
+                        "show-document-history" => "show-document-history-requested",
+                        "show-project-history" => "show-project-history-requested",
                         "record-progress" => "record-progress-requested",
                         "record-project-progress" => "record-project-progress-requested",
                         "track-document" => "track-document-requested",
@@ -1232,7 +1236,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
