@@ -34,7 +34,7 @@ let canResumeWorkspace = false;
 let resumingWorkspace = false;
 function rememberTabs() {
     if (restoringTabs || !session || session.parent || !tabPersistenceEnabled) return;
-    const snapshot = { tabs: tabs.map(({ kind, path, title }) => ({ kind, path, title })), active: active ? tabs.indexOf(active) : null };
+    const snapshot = { tabs: tabs.filter(t => !t.untitled).map(({ kind, path, title }) => ({ kind, path, title })), active: active && !active.untitled ? tabs.filter(t => !t.untitled).indexOf(active) : null };
     const key = JSON.stringify([session.root, snapshot]);
     if (key === lastTabSnapshot && !tabStateError) return;
     lastTabSnapshot = key;
@@ -49,7 +49,7 @@ async function flushTabState() {
 const status = (text, error = false) => { const el = document.querySelector('#status'); el.textContent = text; el.classList.toggle('error', error); };
 const fail = error => { status(String(error), true); return message(String(error), { title: 'Writing Room', kind: 'error' }); };
 const button = (label, action) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => Promise.resolve().then(action).catch(fail); return b; };
-function addTab(tab) { const existing = tabs.find(t => t.kind === tab.kind && t.path === tab.path); if (existing) {
+function addTab(tab) { const existing = tabs.find(t => t.kind === tab.kind && t.path === tab.path && !!t.untitled === !!tab.untitled); if (existing) {
     active = existing;
     render();
     return;
@@ -75,11 +75,11 @@ function renderTabs() {
         return;
     }
     for (const t of tabs) {
-    const dirty = t.doc && t.doc.text !== t.doc.original;
+    const dirty = t.untitled || t.doc && t.doc.text !== t.doc.original;
     const b = button(t.title, () => { active = t; render(); });
     b.classList.toggle('active', t === active);
     b.dataset.tabId = t.id;
-    if (t.kind === 'text' || t.kind === 'html') {
+    if (!t.untitled && (t.kind === 'text' || t.kind === 'html')) {
         b.addEventListener('keydown', event => {
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
                 event.preventDefault();
@@ -104,7 +104,9 @@ async function closeTab(tab) {
     if (!tab || document.querySelector('dialog[open]')) return;
     await editQueue;
     if (!tabs.includes(tab)) return;
-    if (tab.doc && tab.doc.text !== tab.doc.original && !await confirm('未保存の編集があります。タブを閉じますか？編集内容はプロジェクトを閉じるまで保持されます。', { title: 'タブを閉じる' })) return;
+    if (tab.untitled && !await confirm('この無題の原稿を保存せずに閉じますか？内容は破棄されます。', { title: 'タブを閉じる' })) return;
+    if (!tab.untitled && tab.doc && tab.doc.text !== tab.doc.original && !await confirm('未保存の編集があります。タブを閉じますか？編集内容はプロジェクトを閉じるまで保持されます。', { title: 'タブを閉じる' })) return;
+    if (tab.untitled) await invoke('discard_draft', { id: tab.path });
     tabs = tabs.filter(t => t !== tab);
     if (tab.contextMenu) await tab.contextMenu.close();
     if (active === tab) active = tabs.at(-1);
@@ -228,8 +230,9 @@ function render() { rememberEditorPosition(); rememberEditorPosition = () => {};
 } if (t.kind === 'text') {
     const editor = document.createElement('textarea');
     editor.spellcheck = false;
+    editor.disabled = !!t.savingDraft;
     editor.value = t.doc.text;
-    const positionKey = JSON.stringify([session.root, t.path]);
+    const positionKey = JSON.stringify([session.root, t.path, !!t.untitled]);
     const position = editorPositions.get(positionKey) || { start: 0, end: 0, direction: 'none', top: 0, left: 0 };
     editor.setSelectionRange(position.start, position.end, position.direction);
     rememberEditorPosition = () => editorPositions.set(positionKey, {
@@ -237,7 +240,7 @@ function render() { rememberEditorPosition(); rememberEditorPosition = () => {};
         top: editor.scrollTop, left: editor.scrollLeft
     });
     editor.setAttribute('aria-label', t.title);
-    editor.addEventListener('input', () => { const text = editor.value; t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke('update_document', { path: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); });
+    editor.addEventListener('input', () => { const text = editor.value; t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke(t.untitled ? 'update_draft' : 'update_document', { path: t.path, id: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); });
     content.append(editor);
     editor.scrollTop = position.top;
     editor.scrollLeft = position.left;
@@ -282,9 +285,42 @@ else if (isText(path))
 else
     await message('このファイル形式の表示にはまだ対応していません。', { title: 'Writing Room' }); }
 async function openText(path) { await editQueue; const doc = await invoke('read_document', { path }); addTab({ kind: 'text', path, doc, title: path.split('/').at(-1) }); }
-async function save(t = active) { if (t?.kind !== 'text')
-    return; await editQueue; if (t.syncError)
-    throw new Error(t.syncError); t.doc = await invoke('save_document', { path: t.path }); renderTabs(); status(`${t.title} を保存しました`); }
+async function save(t = active) {
+    if (t?.kind !== 'text') return false;
+    if (t.savePromise) return t.savePromise;
+    t.savePromise = saveTextTab(t);
+    try { return await t.savePromise; } finally { t.savePromise = null; }
+}
+async function saveTextTab(t) {
+    await editQueue;
+    if (t.syncError) throw new Error(t.syncError);
+    if (t.untitled) {
+        const selected = await invoke('plugin:dialog|save', { options: {
+            title: '新しい原稿を保存', defaultPath: `${session.root}/無題.txt`,
+            filters: [{ name: 'テキスト', extensions: ['txt', 'md'] }]
+        } });
+        if (!selected || !tabs.includes(t)) return false;
+        // Freeze this editor while the queued edits are saved under the chosen name.
+        t.savingDraft = true;
+        if (active === t) render();
+        try {
+            await editQueue;
+            if (t.syncError) throw new Error(t.syncError);
+            const doc = await invoke('save_draft', { id: t.path, path: selected });
+            t.path = doc.path.slice(session.root.length + 1);
+            t.doc = doc;
+            t.title = t.path.split('/').at(-1);
+            t.untitled = false;
+        } finally {
+            t.savingDraft = false;
+            render();
+            focusEditor();
+        }
+    } else t.doc = await invoke('save_document', { path: t.path });
+    renderTabs();
+    status(`${t.title} を保存しました`);
+    return true;
+}
 async function openDashboard(folder, explicit = false) { let path = await invoke('dashboard', { folder, selection: null, disable: false, create: false }); if (!path) {
     if (!explicit && await invoke('dashboard_disabled', { folder }))
         return;
@@ -356,15 +392,24 @@ await listen('history-error', ({ payload }) => fail(payload));
 await listen('open-recent-requested', ({ payload: root }) => openProjectRoot(root).catch(fail));
 await listen('open-project-requested', () => chooseProject().catch(fail));
 await listen('save-requested', () => save().catch(fail));
-const navigateNumbered = createNumberedNavigation({ getActive: () => active, invoke, confirm,
+await listen('new-document-requested', async () => {
+    if (!session || document.querySelector('dialog[open]')) return;
+    try {
+        const doc = await invoke('create_draft');
+        const number = doc.path.slice('untitled-'.length);
+        addTab({ kind: 'text', path: doc.path, title: `無題 ${number}`, untitled: true, doc });
+        focusEditor();
+    } catch (error) { fail(error); }
+});
+const navigateNumbered = createNumberedNavigation({ getActive: () => active?.untitled ? null : active, invoke, confirm,
     prepare: async tab => {
         await editQueue;
         if (tab.syncError) throw new Error(tab.syncError);
-        if (tab.doc.text !== tab.doc.original) {
+        if (tab.untitled || tab.doc.text !== tab.doc.original) {
             if (!await confirm(`${tab.title} に未保存の編集があります。保存して移動しますか？`, {
                 title: '連番ファイルへ移動', okLabel: '保存して移動', cancelLabel: 'キャンセル'
             })) return false;
-            await save(tab);
+            if (!await save(tab)) return;
         }
         return true;
     },
@@ -404,13 +449,14 @@ await listen('track-document-requested', async () => {
         if (document.querySelector('dialog[open]')) return;
         const tab = active;
         if (tab?.kind !== 'text') throw new Error('追跡に追加する原稿の編集タブを開いてください。');
-        const path = tab.path;
+        let path = tab.path;
         await editQueue;
         if (tab.syncError) throw new Error(tab.syncError);
-        if (tab.doc.text !== tab.doc.original) {
+        if (tab.untitled || tab.doc.text !== tab.doc.original) {
             if (!await confirm('この原稿を保存してから追跡に追加しますか？', { title: '追跡に追加', okLabel: '保存して追加' })) return;
             if (tab.path !== path) return;
-            await save(tab);
+            if (!await save(tab)) return;
+            path = tab.path;
         }
         if (tab.path !== path) return;
         const added = await invoke('track_document', { path });
@@ -422,7 +468,7 @@ for (const project of [false, true]) {
         try {
             if (document.querySelector('dialog[open]')) return;
             if (!session) throw new Error('プロジェクトを開いてください。');
-            if (!project && active?.kind !== 'text') throw new Error('履歴を確認する原稿の編集タブを開いてください。');
+            if (!project && (active?.kind !== 'text' || active.untitled)) throw new Error('履歴を確認する原稿の編集タブを開いてください。');
             await showHistory({ path: project ? null : active.path, invoke });
         } catch (error) { fail(error); }
     });
@@ -442,9 +488,9 @@ await listen('record-progress-requested', async () => {
         const tab = active;
         if (tab?.kind !== 'text') throw new Error('記録する原稿の編集タブを開いてください。');
         if (tab.syncError) throw new Error(tab.syncError);
-        if (tab.doc.text !== tab.doc.original) {
+        if (tab.untitled || tab.doc.text !== tab.doc.original) {
             if (!await confirm('この原稿を保存してから差分を確認しますか？', { title: 'この原稿を記録', okLabel: '保存して続ける' })) return;
-            await save(tab);
+            if (!await save(tab)) return;
         }
         await recordProgress({ path: tab.path, invoke, status });
     } catch (error) { fail(error); }
@@ -515,7 +561,8 @@ await win.onCloseRequested(async (e) => { e.preventDefault(); try {
     if (tabs.some(t => t.syncError))
         throw new Error('同期できていない編集があります。内容をコピーして保管してください。');
     const dirty = session ? await invoke('dirty_project') : [];
-    if (dirty.length && !await confirm(`未保存のファイルが ${dirty.length} 件あります。${session.parent ? '子ウィンドウを閉じますか？編集内容は親ウィンドウに保持されます。' : 'このプロジェクトのウィンドウを閉じますか？最後のウィンドウを閉じると編集内容は失われます。'}\n\n${dirty.map(p => p.split('/').at(-1)).join('\n')}`, { title: '未保存の編集', kind: 'warning' }))
+    const draftWarning = tabs.some(t => t.untitled) ? '\nこのウィンドウの無題の原稿は破棄されます。' : '';
+    if (dirty.length && !await confirm(`未保存のファイルが ${dirty.length} 件あります。${session.parent ? '子ウィンドウを閉じますか？編集内容は親ウィンドウに保持されます。' : 'このプロジェクトのウィンドウを閉じますか？最後のウィンドウを閉じると編集内容は失われます。'}\n\n${dirty.map(p => p.split('/').at(-1)).join('\n')}${draftWarning}`, { title: '未保存の編集', kind: 'warning' }))
         return;
     await flushTabState();
     await invoke('close_window');

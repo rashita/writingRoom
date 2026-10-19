@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod progress;
+mod drafts;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -17,6 +18,7 @@ struct Store {
     exit_approved: bool,
     sessions: HashMap<String, Session>,
     docs: HashMap<String, Doc>,
+    drafts: HashMap<String, drafts::Draft>,
 }
 #[derive(Clone, Serialize)]
 struct Session {
@@ -227,6 +229,9 @@ async fn run_named_task(window: WebviewWindow, app: tauri::AppHandle, state: Sta
         .await.map_err(|e| e.to_string())?
 }
 fn save_project_documents(root: &str, store: &mut Store, mut notify: impl FnMut(&Doc) -> Result<()>) -> Result<()> {
+    if store.drafts.values().any(|d| d.root == root) {
+        return Err("無題の原稿があります。保存先を指定して保存するか、タブを閉じてから実行してください。".into());
+    }
     let mut paths: Vec<_> = store.docs.values()
         .filter(|d| Path::new(&d.path).starts_with(root) && d.text != d.original)
         .map(|d| d.path.clone()).collect();
@@ -369,6 +374,10 @@ fn open_welcome(app: tauri::AppHandle, state: State<Mutex<Store>>) -> Result<()>
         return window.set_focus().map_err(|e| e.to_string());
     }
     drop(store);
+    new_welcome(app)
+}
+#[tauri::command]
+fn new_welcome(app: tauri::AppHandle) -> Result<()> {
     let label = format!("welcome-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
         .title("Writing Room").inner_size(1120., 780.).build().map_err(|e| e.to_string())?;
@@ -892,11 +901,12 @@ fn open_child(
 #[tauri::command]
 fn dirty_project(window: WebviewWindow, state: State<Mutex<Store>>) -> Result<Vec<String>> {
     let s = session(&window, &state)?;
-    Ok(lock(&state)
-        .docs
+    let store = lock(&state);
+    Ok(store.docs
         .values()
         .filter(|d| Path::new(&d.path).starts_with(&s.root) && d.text != d.original)
         .map(|d| d.path.clone())
+        .chain(store.drafts.values().filter(|d| d.root == s.root).map(|d| d.title.clone()))
         .collect())
 }
 #[tauri::command]
@@ -926,6 +936,7 @@ fn close_window(
             .collect();
         for label in children {
             store.sessions.remove(&label);
+            store.drafts.retain(|_, d| d.owner != label);
             if let Some(w) = app.get_webview_window(&label) {
                 w.destroy().map_err(|e| e.to_string())?
             }
@@ -936,17 +947,15 @@ fn close_window(
             }
         }
     }
+    store.drafts.retain(|_, d| d.owner != window.label());
     drop(store);
     window.destroy().map_err(|e| e.to_string())
 }
 #[tauri::command]
 fn dirty_all(state: State<Mutex<Store>>) -> Vec<String> {
-    lock(&state)
-        .docs
-        .values()
-        .filter(|d| d.text != d.original)
-        .map(|d| d.path.clone())
-        .collect()
+    let store = lock(&state);
+    store.docs.values().filter(|d| d.text != d.original).map(|d| d.path.clone())
+        .chain(store.drafts.values().map(|d| d.title.clone())).collect()
 }
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle, state: State<Mutex<Store>>) {
@@ -1114,11 +1123,13 @@ fn main() {
             let save = MenuItem::with_id(app,"save-document","保存",true,Some("CmdOrCtrl+S"))?;
             let track = MenuItem::with_id(app,"track-document","このファイルを追跡に追加",true,None::<&str>)?;
             let progress = MenuItem::with_id(app,"record-progress","この原稿を記録…",true,Some("CmdOrCtrl+K"))?;
+            let new_document = MenuItem::with_id(app,"new-document","新しい原稿",true,Some("CmdOrCtrl+N"))?;
+            let new_window = MenuItem::with_id(app,"new-window","新しいウィンドウ",true,Some("CmdOrCtrl+Shift+N"))?;
             let welcome = MenuItem::with_id(app,"open-welcome","ウェルカムページを開く",true,None::<&str>)?;
             let recent = SubmenuBuilder::with_id(app,"recent-projects","最近使ったプロジェクト").build()?;
             let close_tab = MenuItem::with_id(app,"close-tab","タブを閉じる",true,Some("CmdOrCtrl+W"))?;
             let close_window = MenuItem::with_id(app,"close-project-window","ウィンドウを閉じる",true,Some("CmdOrCtrl+Shift+W"))?;
-            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&welcome).item(&open_project).item(&recent).item(&save).separator().item(&close_tab).item(&close_window).build()?;
+            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&new_document).item(&new_window).separator().item(&welcome).item(&open_project).item(&recent).item(&save).separator().item(&close_tab).item(&close_window).build()?;
             let no_tasks = MenuItem::with_id(app,"no-tasks","プロジェクトを開いてください",false,None::<&str>)?;
             let tasks = MenuItem::with_id(app,"manage-tasks","コマンドを登録・編集…",true,None::<&str>)?;
             let task_log = MenuItem::with_id(app,"show-task-log","直近のコマンドログを確認…",false,None::<&str>)?;
@@ -1150,6 +1161,9 @@ fn main() {
                 return;
             }
 
+            if event.id().as_ref() == "new-window" {
+                if let Err(error) = new_welcome(app.clone()) { let _ = app.emit("history-error", error); }
+            }
             if event.id().as_ref() == "open-welcome" {
                 let state = app.state::<Mutex<Store>>();
                 if let Err(error) = open_welcome(app.clone(), state) { let _ = app.emit("history-error", error); }
@@ -1170,7 +1184,7 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
@@ -1181,6 +1195,7 @@ fn main() {
                         "run-task" => "run-task-requested",
                         "manage-tasks" => "manage-tasks-requested",
                         "save-document" => "save-requested",
+                        "new-document" => "new-document-requested",
                         "show-document-history" => "show-document-history-requested",
                         "show-project-history" => "show-project-history-requested",
                         "record-progress" => "record-progress-requested",
@@ -1236,7 +1251,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
