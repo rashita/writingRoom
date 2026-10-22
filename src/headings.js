@@ -32,25 +32,34 @@ export function currentHeadingIndex(headings, position) {
     return index;
 }
 
-export function showHeadingList({ headings, position, onChoose, onClose }) {
+export function showHeadingList({ headings, position, onChoose, onClose, title: listTitle = '見出しへ移動', onSwitch, switchLabel = '全体の見出し', selectedIndex }) {
     const dialog = document.createElement('dialog');
     dialog.className = 'heading-dialog';
     dialog.setAttribute('aria-labelledby', 'heading-list-title');
     const header = document.createElement('header');
     const title = document.createElement('h2');
     title.id = 'heading-list-title';
-    title.textContent = '見出しへ移動';
+    title.textContent = listTitle;
     const close = document.createElement('button');
     close.textContent = '閉じる';
     close.addEventListener('click', () => dialog.close());
-    header.append(title, close);
+    let switched = false;
+    header.append(title);
+    if (onSwitch) {
+        const switchButton = document.createElement('button');
+        switchButton.textContent = switchLabel;
+        switchButton.addEventListener('click', () => { switched = true; dialog.close(); onSwitch(); });
+        header.append(switchButton);
+    }
+    header.append(close);
     const list = document.createElement('div');
     list.className = 'heading-list';
     let accepted = false;
-    let selected = currentHeadingIndex(headings, position);
+    let selected = selectedIndex ?? currentHeadingIndex(headings, position);
     const buttons = headings.map((heading, index) => {
         const button = document.createElement('button');
-        button.textContent = heading.title;
+        const startsFile = heading.path && (index === 0 || headings[index - 1].path !== heading.path);
+        button.textContent = startsFile ? `${heading.title} — ${heading.path.split('/').at(-1)}` : heading.title;
         button.style.paddingLeft = `${12 + (heading.level - 1) * 16}px`;
         button.setAttribute('aria-label', `見出し${heading.level}：${heading.title}`);
         if (index === selected) button.setAttribute('aria-current', 'location');
@@ -59,7 +68,7 @@ export function showHeadingList({ headings, position, onChoose, onClose }) {
         return button;
     });
     list.append(...buttons);
-    if (!headings.length) list.textContent = 'この原稿にはMarkdownの見出しがありません。';
+    if (!headings.length) list.textContent = '対象の原稿にはMarkdownの見出しがありません。';
     dialog.append(header, list);
     dialog.addEventListener('keydown', event => {
         if (event.isComposing || event.keyCode === 229) return;
@@ -74,7 +83,7 @@ export function showHeadingList({ headings, position, onChoose, onClose }) {
         event.preventDefault();
         buttons[next].focus();
     });
-    dialog.addEventListener('close', () => { dialog.remove(); onClose(accepted); }, { once: true });
+    dialog.addEventListener('close', () => { dialog.remove(); if (!switched) onClose(accepted); }, { once: true });
     document.body.append(dialog);
     dialog.showModal();
     if (buttons.length) {

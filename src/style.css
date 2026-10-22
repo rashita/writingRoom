@@ -2,6 +2,26 @@
 
 nav button.recent-project{color:#77847b;background:#edf0eb;font-weight:400}nav button.recent-project:hover{color:#31604f;background:#e0e9df}nav button.recent-project.unavailable{color:#9b8b82}nav button{user-select:none}
 
+/* Keep occasional filer actions quiet until they are used. */
+.filer-toolbar button,
+.files .row button:not(.name) {
+    border-color: transparent;
+    background: transparent;
+    color: #718078;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+.filer-toolbar button:hover,
+.files .row button:not(.name):hover {
+    background: #f0f3f0;
+    color: #303b38;
+}
+.filer-toolbar button:focus-visible,
+.files .row button:not(.name):focus-visible {
+    outline: 2px solid #718078;
+    outline-offset: 2px;
+}
+
 /* Keep the tab row's height stable while retaining horizontal scrolling. */
 #tabs {
     overflow-x: auto;

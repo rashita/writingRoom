@@ -21,6 +21,7 @@ const win = getCurrentWindow();
 const content = document.querySelector('#content');
 const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
+let draggedTab = null;
 const editorStates = createEditorStateStore();
 let manuscriptEditor = null;
 let closeHeadingList = () => {};
@@ -103,7 +104,7 @@ window.addEventListener('blur', cancelShortcuts);
 window.addEventListener('pointerdown', cancelShortcuts, true);
 window.addEventListener('compositionstart', cancelShortcuts, true);
 document.addEventListener('visibilitychange', () => { if (document.hidden) cancelShortcuts(); });
-const button = (label, action) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => Promise.resolve().then(action).catch(fail); return b; };
+const button = (label, action) => { const b = document.createElement('button'); b.textContent = label; b.onclick = event => Promise.resolve().then(() => action(event)).catch(fail); return b; };
 function addTab(tab) { const existing = tabs.find(t => t.kind === tab.kind && t.path === tab.path && !!t.untitled === !!tab.untitled); if (existing) {
     active = existing;
     render();
@@ -134,6 +135,29 @@ function renderTabs() {
     const b = button(t.title, () => { active = t; render(); });
     b.classList.toggle('active', t === active);
     b.dataset.tabId = t.id;
+    b.draggable = true;
+    b.addEventListener('dragstart', event => {
+        draggedTab = t;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(t.id));
+    });
+    b.addEventListener('dragend', () => { draggedTab = null; });
+    b.addEventListener('dragover', event => {
+        if (!draggedTab || draggedTab === t || !tabs.includes(draggedTab)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    });
+    b.addEventListener('drop', event => {
+        if (!draggedTab || draggedTab === t || !tabs.includes(draggedTab)) return;
+        event.preventDefault();
+        const rect = b.getBoundingClientRect();
+        const after = event.clientX >= rect.left + rect.width / 2;
+        const moved = draggedTab;
+        draggedTab = null;
+        tabs = tabs.filter(tab => tab !== moved);
+        tabs.splice(tabs.indexOf(t) + (after ? 1 : 0), 0, moved);
+        renderTabs();
+    });
     if (!t.untitled && (t.kind === 'text' || t.kind === 'html')) {
         b.addEventListener('keydown', event => {
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -301,8 +325,8 @@ function render() {
         editorStates.save(positionKey, editor.snapshot());
     };
 } }
-async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.path.split('/').slice(0, -1).join('/'); if (t.path)
-    bar.append(button('↑ 上へ', () => openFolder(parent))); bar.append(button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
+async function renderFiles(t) { const bar = toolbar(t.path); bar.classList.add('filer-toolbar'); const parent = t.path.split('/').slice(0, -1).join('/'); if (t.path)
+    bar.append(button('↑ 上へ', event => navigateFolder(t, parent, event.metaKey))); bar.append(button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
     const entries = await invoke('list_files', { folder: t.path });
     if (active !== t)
         return;
@@ -313,7 +337,7 @@ async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.pa
     for (const entry of entries) {
         const row = document.createElement('div');
         row.className = 'row';
-        const name = button(`${entry.directory ? '▸' : '·'}  ${entry.name}`, () => entry.directory ? openFolder(entry.path) : openFile(entry.path));
+        const name = button(`${entry.directory ? '▸' : '·'}  ${entry.name}`, event => entry.directory ? navigateFolder(t, entry.path, event.metaKey) : openFile(entry.path));
         name.className = 'name';
         const meta = document.createElement('span');
         meta.className = 'meta';
@@ -330,6 +354,16 @@ catch (e) {
 const isText = path => /\.(txt|md|markdown|mmd|html?|css|js|json|toml|csv|log|yaml|yml|xml|tex)$/i.test(path);
 const assetUrl = path => `project://localhost/${win.label}/${path.split('/').map(encodeURIComponent).join('/')}`;
 async function openFolder(path) { addTab({ kind: 'files', path, title: path.split('/').at(-1) || 'ファイル' }); }
+function navigateFolder(tab, path, newTab) {
+    if (newTab) return openFolder(path);
+    tab.path = path;
+    tab.title = path.split('/').at(-1) || 'ファイル';
+    active = tab;
+    render();
+}
+await listen('show-filer-requested', () => {
+    if (session && !document.querySelector('dialog[open]')) openFolder('').catch(fail);
+});
 async function openFile(path) { if (/\.html?$/i.test(path))
     addTab({ kind: 'html', path, folder: path.split('/').slice(0, -1).join('/'), title: path.split('/').at(-1) });
 else if (/\.(svg|png|jpe?g|gif|webp)$/i.test(path))
@@ -509,13 +543,14 @@ await listen('open-heading-requested', () => {
     cancelShortcuts();
     if (!manuscriptEditor?.openCurrentHeading()) status('この見出しは閉じていません。');
 });
-await listen('show-headings-requested', () => {
+function showFileHeadings() {
     if (active?.kind !== 'text' || active.savingDraft || !manuscriptEditor || document.querySelector('dialog[open]')) return;
     cancelShortcuts();
     const editor = manuscriptEditor;
     const snapshot = editor.snapshot();
     const text = snapshot.state.doc.toString();
     closeHeadingList = showHeadingList({
+        onSwitch: () => showBookHeadings().catch(fail),
         headings: getHeadings(text), position: snapshot.state.selection.main.head,
         onChoose(heading) {
             if (manuscriptEditor !== editor) return;
@@ -527,7 +562,53 @@ await listen('show-headings-requested', () => {
         },
         onClose(accepted) { if (manuscriptEditor === editor) editor.focus(accepted ? undefined : snapshot); }
     });
-});
+}
+await listen('show-headings-requested', showFileHeadings);
+let loadingBookHeadings = false;
+async function showBookHeadings() {
+    if (!session || loadingBookHeadings || document.querySelector('dialog[open]')) return;
+    loadingBookHeadings = true;
+    cancelShortcuts();
+    try {
+        await editQueue;
+        const folder = await invoke('get_manuscript_folder');
+        let entries;
+        try { entries = await invoke('list_files', { folder }); }
+        catch (error) { throw new Error(`原稿フォルダ「${folder}」を開けません。\n${error}`); }
+        const files = entries.filter(e => !e.directory && /\.(md|markdown|mmd|txt)$/i.test(e.name))
+            .sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }));
+        const headings = [];
+        for (const file of files) {
+            const doc = await invoke('read_document', { path: file.path });
+            headings.push(...getHeadings(doc.text).map(h => ({ ...h, path: file.path, text: doc.text })));
+        }
+        if (document.querySelector('dialog[open]')) return;
+        const origin = active;
+        const editor = manuscriptEditor;
+        const snapshot = editor?.snapshot();
+        const position = snapshot?.state.selection.main.head ?? 0;
+        const local = headings.filter(h => h.path === origin?.path);
+        const current = local.filter(h => h.from <= position).at(-1) || local[0];
+        closeHeadingList = showHeadingList({
+            headings, position: 0, selectedIndex: Math.max(0, headings.indexOf(current)),
+            title: '全体の見出しへ移動',
+            onSwitch: origin?.kind === 'text' ? showFileHeadings : undefined,
+            switchLabel: 'ファイル内の見出し',
+            onChoose: heading => {
+                (async () => {
+                    await openText(heading.path);
+                    if (active.doc.text !== heading.text) {
+                        status('原稿が更新されました。見出し一覧を開き直してください。');
+                        return;
+                    }
+                    manuscriptEditor.jumpTo(heading.from);
+                })().catch(fail);
+            },
+            onClose(accepted) { if (!accepted && manuscriptEditor === editor) editor?.focus(snapshot); }
+        });
+    } finally { loadingBookHeadings = false; }
+}
+await listen('show-book-headings-requested', () => showBookHeadings().catch(fail));
 await listen('tab-previous-requested', () => switchTab(-1));
 await listen('tab-next-requested', () => switchTab(1));
 await listen('track-document-requested', async () => {

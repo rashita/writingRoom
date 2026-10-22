@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "main",
+        "dragDropEnabled": false,
         "title": "Writing Room",
         "width": 1120,
         "height": 780,
