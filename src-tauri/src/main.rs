@@ -1125,11 +1125,10 @@ fn main() {
             let progress = MenuItem::with_id(app,"record-progress","この原稿を記録…（⌘K → K）",true,None::<&str>)?;
             let new_document = MenuItem::with_id(app,"new-document","新しい原稿",true,Some("CmdOrCtrl+N"))?;
             let new_window = MenuItem::with_id(app,"new-window","新しいウィンドウ",true,Some("CmdOrCtrl+Shift+N"))?;
-            let welcome = MenuItem::with_id(app,"open-welcome","ウェルカムページを開く",true,None::<&str>)?;
             let recent = SubmenuBuilder::with_id(app,"recent-projects","最近使ったプロジェクト").build()?;
             let close_tab = MenuItem::with_id(app,"close-tab","タブを閉じる",true,Some("CmdOrCtrl+W"))?;
             let close_window = MenuItem::with_id(app,"close-project-window","ウィンドウを閉じる",true,Some("CmdOrCtrl+Shift+W"))?;
-            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&new_document).item(&new_window).separator().item(&welcome).item(&open_project).item(&recent).item(&save).separator().item(&close_tab).item(&close_window).build()?;
+            let file = SubmenuBuilder::with_id(app,"file-menu","ファイル").item(&new_document).item(&new_window).separator().item(&open_project).item(&recent).item(&save).separator().item(&close_tab).item(&close_window).build()?;
             let no_tasks = MenuItem::with_id(app,"no-tasks","プロジェクトを開いてください",false,None::<&str>)?;
             let tasks = MenuItem::with_id(app,"manage-tasks","コマンドを登録・編集…",true,None::<&str>)?;
             let task_log = MenuItem::with_id(app,"show-task-log","直近のコマンドログを確認…",false,None::<&str>)?;
@@ -1163,10 +1162,6 @@ fn main() {
 
             if event.id().as_ref() == "new-window" {
                 if let Err(error) = new_welcome(app.clone()) { let _ = app.emit("history-error", error); }
-            }
-            if event.id().as_ref() == "open-welcome" {
-                let state = app.state::<Mutex<Store>>();
-                if let Err(error) = open_welcome(app.clone(), state) { let _ = app.emit("history-error", error); }
             }
             if let Some(index) = event.id().as_ref().strip_prefix("recent-project-").and_then(|s|s.parse::<usize>().ok()) {
                 let state = app.state::<Mutex<HistoryStore>>();
