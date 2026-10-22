@@ -9,7 +9,7 @@ export function createChordInput(document) {
             sink = document.createElement('div');
             sink.tabIndex = -1;
             sink.className = 'chord-input';
-            sink.setAttribute('aria-label', '履歴操作の次のキーを待っています');
+            sink.setAttribute('aria-label', '次の操作キーを待っています');
             sink.contentEditable = 'false';
             document.body.append(sink);
             sink.focus({ preventScroll: true });

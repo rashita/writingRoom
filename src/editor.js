@@ -1,4 +1,6 @@
-import { EditorState, EditorView, StateEffect, history, historyKeymap, defaultKeymap, keymap } from './cm-bundle.js';
+import { headingFolds, closeHeading, openHeading } from './heading-fold.js';
+import { currentHeadingRange } from './headings.js';
+import { EditorState, EditorView, StateEffect, history, historyKeymap, defaultKeymap, keymap, drawSelection } from './cm-bundle.js';
 
 function textChange(old, text) {
     let from = 0, end = old.length, nextEnd = text.length;
@@ -12,6 +14,8 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
     let receiving = false;
     const extensions = [
         history(),
+        headingFolds,
+        drawSelection(),
         keymap.of([...historyKeymap, ...defaultKeymap.filter(binding =>
             binding.key !== 'Enter' && binding.key !== 'Mod-Enter')]),
         EditorState.tabSize.of(4),
@@ -37,11 +41,34 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
         write: () => { view.scrollDOM.scrollTop = saved.top; view.scrollDOM.scrollLeft = saved.left; }
     });
     return {
-        focus() {
-            const { scrollTop, scrollLeft } = view.scrollDOM;
+        focus(position) {
+            const scrollTop = position?.top ?? view.scrollDOM.scrollTop;
+            const scrollLeft = position?.left ?? view.scrollDOM.scrollLeft;
             view.focus();
             view.scrollDOM.scrollTop = scrollTop;
             view.scrollDOM.scrollLeft = scrollLeft;
+        },
+        closeCurrentHeading() {
+            const range = currentHeadingRange(view.state.doc.toString(), view.state.selection.main.head);
+            if (!range) return false;
+            view.dispatch({ selection: { anchor: range.heading }, effects: closeHeading.of(range) });
+            view.focus();
+            return true;
+        },
+        openCurrentHeading() {
+            const range = currentHeadingRange(view.state.doc.toString(), view.state.selection.main.head);
+            if (!range) return false;
+            let found = false;
+            view.state.field(headingFolds).between(range.from, range.from, from => { if (from === range.from) found = true; });
+            if (!found) return false;
+            view.dispatch({ effects: openHeading.of(range.from) });
+            view.focus();
+            return true;
+        },
+        jumpTo(position) {
+            const anchor = Math.max(0, Math.min(position, view.state.doc.length));
+            view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: 'start', yMargin: 12 }) });
+            view.focus();
         },
         snapshot: () => ({ state: view.state, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }),
         setText(text) {

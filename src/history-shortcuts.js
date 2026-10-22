@@ -1,5 +1,5 @@
 // Capture the second stroke before it can become manuscript text.
-export function createHistoryShortcuts({ getContext, waiting, record, history }) {
+export function createChordShortcuts({ getContext, waiting, prefix, actions }) {
     let context = null;
     let consumedKey = null;
     const cancel = () => {
@@ -22,24 +22,23 @@ export function createHistoryShortcuts({ getContext, waiting, record, history })
             const current = getContext();
             if (context && current !== context) cancel();
             const key = event.key.toLowerCase();
-            // During an explicitly requested chord, recognize physical K/L even
+            // During an explicitly requested chord, recognize physical letter keys even
             // when the IME reports Process/229 or marks this stroke as composing.
-            const stroke = event.code === 'KeyK' ? 'k' : event.code === 'KeyL' ? 'l' : key;
+            const stroke = /^Key[A-Z]$/.test(event.code || '') ? event.code.slice(3).toLowerCase() : key;
             if (event.repeat && keyIdentity(event) === consumedKey) { consume(event); return; }
             if (!event.repeat) consumedKey = null;
-            if (context && !event.altKey && !event.shiftKey && (stroke === 'k' || stroke === 'l')) {
+            if (context && !event.altKey && !event.shiftKey && Object.hasOwn(actions, stroke)) {
                 consume(event);
                 if (event.repeat) return;
                 const target = context;
                 cancel();
-                if (stroke === 'k') record(target);
-                else history(target);
+                actions[stroke](target);
                 return;
             }
             if (event.isComposing || event.keyCode === 229) { cancel(); return; }
             if (!context) {
                 if (!current || event.defaultPrevented || event.altKey || event.shiftKey ||
-                    !(event.metaKey || event.ctrlKey) || key !== 'k') return;
+                    !(event.metaKey || event.ctrlKey) || key !== prefix) return;
                 consume(event);
                 if (event.repeat) return;
                 context = current;
@@ -55,4 +54,8 @@ export function createHistoryShortcuts({ getContext, waiting, record, history })
             if (!(event.metaKey || event.ctrlKey || event.altKey)) consume(event);
         }
     };
+}
+
+export function createHistoryShortcuts({ getContext, waiting, record, history }) {
+    return createChordShortcuts({ getContext, waiting, prefix: 'k', actions: { k: record, l: history } });
 }

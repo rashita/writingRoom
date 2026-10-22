@@ -1,7 +1,8 @@
+import { getHeadings, showHeadingList } from './headings.js';
 import { createEditorStateStore, editorKey } from './editor-state.js';
 import { createEditor } from './editor.js';
 import { createChordInput } from './chord-input.js';
-import { createHistoryShortcuts } from './history-shortcuts.js';
+import { createHistoryShortcuts, createChordShortcuts } from './history-shortcuts.js';
 import { showHistory } from './history.js';
 import { showTaskLog, runNamedTask, manageNamedTasks } from './named-tasks.js';
 import { recordProgress } from './progress.js';
@@ -22,6 +23,7 @@ const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
 const editorStates = createEditorStateStore();
 let manuscriptEditor = null;
+let closeHeadingList = () => {};
 let rememberEditorPosition = () => {};
 const focusMode = createFocusMode(document.body, () => active?.kind === 'text' ? manuscriptEditor : null);
 window.addEventListener('keydown', focusMode.handleKeydown);
@@ -55,33 +57,52 @@ const fail = error => { status(String(error), true); return message(String(error
 const chordHint = 'K：この原稿を記録 ／ L：この原稿の履歴 ／ Esc：キャンセル';
 let statusBeforeChord;
 const chordInput = createChordInput(document);
+function waitForChord(hint, enabled) {
+    const el = document.querySelector('#status');
+    document.body.classList.toggle('history-chord-pending', enabled);
+    if (enabled) {
+        statusBeforeChord = { text: el.textContent, error: el.classList.contains('error') };
+        status(hint);
+        chordInput.begin();
+    } else {
+        chordInput.end();
+        if (el.textContent === hint) status(statusBeforeChord.text, statusBeforeChord.error);
+    }
+}
 const historyShortcuts = createHistoryShortcuts({
     getContext: () => session && active?.kind === 'text' && !active.savingDraft &&
         !document.querySelector('dialog[open]') ? active : null,
-    waiting(enabled) {
-        const el = document.querySelector('#status');
-        document.body.classList.toggle('history-chord-pending', enabled);
-        if (enabled) {
-            statusBeforeChord = { text: el.textContent, error: el.classList.contains('error') };
-            status(chordHint);
-            chordInput.begin();
-        } else {
-            chordInput.end();
-            if (el.textContent === chordHint) status(statusBeforeChord.text, statusBeforeChord.error);
-        }
-    },
+    waiting: enabled => waitForChord(chordHint, enabled),
     record: tab => recordCurrentProgress(tab),
     history: tab => {
         if (tab.untitled) { status('履歴を確認するには、原稿を保存してください。', true); return; }
         showHistory({ path: tab.path, invoke }).catch(fail);
     }
 });
-window.addEventListener('keydown', historyShortcuts.handleKeydown, true);
-window.addEventListener('keyup', historyShortcuts.handleKeyup, true);
-window.addEventListener('blur', historyShortcuts.cancel);
-window.addEventListener('pointerdown', historyShortcuts.cancel, true);
-window.addEventListener('compositionstart', historyShortcuts.cancel, true);
-document.addEventListener('visibilitychange', () => { if (document.hidden) historyShortcuts.cancel(); });
+const headingHint = 'P：閉じる ／ O：開く ／ Esc：キャンセル';
+const headingShortcuts = createChordShortcuts({
+    prefix: 'h',
+    getContext: () => active?.kind === 'text' && !active.savingDraft && !document.querySelector('dialog[open]') ? manuscriptEditor : null,
+    waiting: enabled => waitForChord(headingHint, enabled),
+    actions: {
+        p: editor => { if (!editor.closeCurrentHeading()) status('閉じられる見出しの本文がありません。'); },
+        o: editor => { if (!editor.openCurrentHeading()) status('この見出しは閉じていません。'); }
+    }
+});
+function cancelShortcuts() { historyShortcuts.cancel(); headingShortcuts.cancel(); }
+window.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+        if (event.key.toLowerCase() === 'h') historyShortcuts.cancel();
+        if (event.key.toLowerCase() === 'k') headingShortcuts.cancel();
+    }
+    headingShortcuts.handleKeydown(event);
+    if (!event.defaultPrevented) historyShortcuts.handleKeydown(event);
+}, true);
+window.addEventListener('keyup', event => { headingShortcuts.handleKeyup(event); historyShortcuts.handleKeyup(event); }, true);
+window.addEventListener('blur', cancelShortcuts);
+window.addEventListener('pointerdown', cancelShortcuts, true);
+window.addEventListener('compositionstart', cancelShortcuts, true);
+document.addEventListener('visibilitychange', () => { if (document.hidden) cancelShortcuts(); });
 const button = (label, action) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => Promise.resolve().then(action).catch(fail); return b; };
 function addTab(tab) { const existing = tabs.find(t => t.kind === tab.kind && t.path === tab.path && !!t.untitled === !!tab.untitled); if (existing) {
     active = existing;
@@ -212,7 +233,8 @@ function focusEditor() {
     manuscriptEditor?.focus();
 }
 function render() {
-    historyShortcuts.cancel();
+    closeHeadingList();
+    cancelShortcuts();
     rememberEditorPosition();
     rememberEditorPosition = () => {};
     editorStates.retain(tabs.filter(t => t.kind === 'text').map(t => editorKey(session.root, t)));
@@ -305,7 +327,7 @@ async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.pa
 catch (e) {
     fail(e);
 } }
-const isText = path => /\.(txt|md|markdown|mmd|html?|css|js|json|csv|log|yaml|yml|xml|tex)$/i.test(path);
+const isText = path => /\.(txt|md|markdown|mmd|html?|css|js|json|toml|csv|log|yaml|yml|xml|tex)$/i.test(path);
 const assetUrl = path => `project://localhost/${win.label}/${path.split('/').map(encodeURIComponent).join('/')}`;
 async function openFolder(path) { addTab({ kind: 'files', path, title: path.split('/').at(-1) || 'ファイル' }); }
 async function openFile(path) { if (/\.html?$/i.test(path))
@@ -477,6 +499,35 @@ function switchTab(direction) {
     tabsEl.querySelector(`[data-tab-id="${active.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     focusEditor();
 }
+await listen('close-heading-requested', () => {
+    if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
+    cancelShortcuts();
+    if (!manuscriptEditor?.closeCurrentHeading()) status('閉じられる見出しの本文がありません。');
+});
+await listen('open-heading-requested', () => {
+    if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
+    cancelShortcuts();
+    if (!manuscriptEditor?.openCurrentHeading()) status('この見出しは閉じていません。');
+});
+await listen('show-headings-requested', () => {
+    if (active?.kind !== 'text' || active.savingDraft || !manuscriptEditor || document.querySelector('dialog[open]')) return;
+    cancelShortcuts();
+    const editor = manuscriptEditor;
+    const snapshot = editor.snapshot();
+    const text = snapshot.state.doc.toString();
+    closeHeadingList = showHeadingList({
+        headings: getHeadings(text), position: snapshot.state.selection.main.head,
+        onChoose(heading) {
+            if (manuscriptEditor !== editor) return;
+            if (editor.snapshot().state.doc.toString() !== text) {
+                status('原稿が更新されました。見出し一覧を開き直してください。');
+                return;
+            }
+            editor.jumpTo(heading.from);
+        },
+        onClose(accepted) { if (manuscriptEditor === editor) editor.focus(accepted ? undefined : snapshot); }
+    });
+});
 await listen('tab-previous-requested', () => switchTab(-1));
 await listen('tab-next-requested', () => switchTab(1));
 await listen('track-document-requested', async () => {

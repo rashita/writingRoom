@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { headingFolds, closeHeading, openHeading } from '../src/heading-fold.js';
+import { currentHeadingRange } from '../src/headings.js';
 import * as cm from '../src/cm-bundle.js';
 import { createEditorStateStore, editorKey } from '../src/editor-state.js';
 
@@ -8,6 +10,8 @@ import { createEditorStateStore, editorKey } from '../src/editor-state.js';
 // Actual layout and IME still require a WebView.
 let view;
 class TestView {
+    static decorations = cm.EditorView.decorations;
+    static scrollIntoView = cm.EditorView.scrollIntoView;
     static lineWrapping = cm.EditorView.lineWrapping;
     static editable = cm.EditorView.editable;
     static editorAttributes = cm.EditorView.editorAttributes;
@@ -30,9 +34,9 @@ class TestView {
     focus() { this.focused = true; }
     destroy() { this.destroyed = true; }
 }
-const context = vm.createContext({ ...cm, EditorView: TestView });
+const context = vm.createContext({ ...cm, headingFolds, closeHeading, openHeading, currentHeadingRange, EditorView: TestView });
 const source = fs.readFileSync(new URL('../src/editor.js', import.meta.url), 'utf8')
-    .replace(/^import .*;\n/, '').replace('export function', 'function');
+    .replace(/^import .*;\n/gm, '').replace('export function', 'function');
 vm.runInContext(source, context);
 const changes = [];
 const options = { parent: {}, text: '見出し\n本文', title: '原稿.md', onChange: text => changes.push(text) };
@@ -101,3 +105,56 @@ assert.ok(store.get(secondKey).state, 'Save As transfers state to the saved manu
 assert.notEqual(editorKey('/other', tab), secondKey, 'project roots distinguish manuscripts');
 assert.notEqual(editorKey('/project', { ...tab, untitled: true }), secondKey);
 console.log('Per-manuscript state isolation, release, reopening and renaming checks passed');
+
+const beforeJump = view.state.doc.toString();
+const changesBeforeJump = changes.length;
+editor.jumpTo(2);
+assert.equal(view.state.selection.main.head, 2);
+assert.equal(view.state.doc.toString(), beforeJump);
+assert.equal(changes.length, changesBeforeJump, 'heading navigation does not edit the manuscript');
+
+editor.destroy();
+const foldText = '# 親\n親本文\n\n## 子\n子本文\n\n# 次\n次の本文';
+editor = context.createEditor({ ...options, text: foldText });
+view.dispatch({ selection: { anchor: foldText.indexOf('子本文') } });
+const foldChanges = changes.length;
+assert.equal(editor.closeCurrentHeading(), true);
+assert.equal(view.state.selection.main.head, foldText.indexOf('## 子'));
+assert.equal(view.state.field(headingFolds).size, 1);
+assert.equal(view.state.doc.toString(), foldText);
+assert.equal(changes.length, foldChanges);
+const folded = editor.snapshot();
+editor.destroy();
+editor = context.createEditor({ ...options, text: foldText, saved: folded });
+assert.equal(view.state.field(headingFolds).size, 1, 'fold survives switching tabs');
+editor.jumpTo(foldText.indexOf('子本文'));
+assert.equal(view.state.field(headingFolds).size, 0, 'navigation reveals a hidden destination');
+editor.jumpTo(0);
+editor.closeCurrentHeading();
+let foldedTo;
+view.state.field(headingFolds).between(0, foldText.length, (from, to) => { foldedTo = to; });
+assert.equal(foldedTo, foldText.indexOf('# 次') - 1);
+assert.equal(editor.closeCurrentHeading(), true);
+assert.equal(view.state.field(headingFolds).size, 1, 'repeated close is idempotent');
+assert.equal(currentHeadingRange('導入\n\n# 章\n本文', 0), null);
+assert.equal(currentHeadingRange('# 本文なし', 0), null);
+console.log('Heading folding ranges, caret relocation, persistence and hidden navigation checks passed');
+
+const beforeOpenChanges = changes.length;
+assert.equal(editor.openCurrentHeading(), true);
+assert.equal(view.state.field(headingFolds).size, 0);
+assert.equal(view.state.selection.main.head, 0);
+assert.equal(view.state.doc.toString(), foldText);
+assert.equal(changes.length, beforeOpenChanges, 'opening does not modify text');
+assert.equal(editor.openCurrentHeading(), false, 'already open is a no-op');
+editor.jumpTo(foldText.indexOf('子本文'));
+editor.closeCurrentHeading();
+editor.jumpTo(0);
+editor.closeCurrentHeading();
+assert.equal(view.state.field(headingFolds).size, 2);
+editor.openCurrentHeading();
+assert.equal(view.state.field(headingFolds).size, 1, 'opening a parent preserves folded children');
+editor.jumpTo(foldText.indexOf('## 子'));
+assert.equal(editor.openCurrentHeading(), true);
+assert.equal(view.state.field(headingFolds).size, 0);
+console.log('Heading opening, repeated open and nested fold preservation checks passed');

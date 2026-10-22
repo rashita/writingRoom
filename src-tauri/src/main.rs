@@ -96,7 +96,7 @@ fn load_task_output(root: &str, path: &str, docs: &mut HashMap<String, Doc>) -> 
         "pdf" => "pdf",
         "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp" => "image",
         "html" | "htm" => "html",
-        "txt" | "md" | "markdown" | "mmd" | "css" | "js" | "json" | "csv" | "log" | "yaml" | "yml" | "xml" | "tex" => "text",
+        "txt" | "md" | "markdown" | "mmd" | "css" | "js" | "json" | "toml" | "csv" | "log" | "yaml" | "yml" | "xml" | "tex" => "text",
         _ => return Err("このファイル形式はアプリ内で表示できません。コマンド設定で「既定の外部アプリで開く」を選んでください".into()),
     };
     let doc = if kind == "text" { Some(read_document_from_disk(docs, &resolved, key)?) } else { None };
@@ -1146,7 +1146,10 @@ fn main() {
             let next = MenuItem::with_id(app,"numbered-next","次の連番ファイル",true,Some("CmdOrCtrl+Alt+]"))?;
             let previous_tab = MenuItem::with_id(app,"tab-previous","前のタブ",true,Some("CmdOrCtrl+Alt+Left"))?;
             let next_tab = MenuItem::with_id(app,"tab-next","次のタブ",true,Some("CmdOrCtrl+Alt+Right"))?;
-            let navigation = SubmenuBuilder::new(app,"移動").item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
+            let headings = MenuItem::with_id(app,"show-headings","見出しへ移動…",true,Some("CmdOrCtrl+Shift+O"))?;
+            let close_heading = MenuItem::with_id(app,"close-heading","直近の見出しを閉じる（⌘H → P）",true,None::<&str>)?;
+            let open_heading = MenuItem::with_id(app,"open-heading","直近の見出しを開く（⌘H → O）",true,None::<&str>)?;
+            let navigation = SubmenuBuilder::new(app,"移動").item(&headings).item(&close_heading).item(&open_heading).separator().item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
             let view = SubmenuBuilder::new(app,"表示").item(&increase).item(&decrease).item(&reset).separator().item(&focus).separator().item(&inspect).build()?;
             MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&view,&navigation]).build()
         })
@@ -1179,11 +1182,14 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "open-heading" | "close-heading" | "show-headings" | "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
                     let name = match event.id().as_ref() {
+                        "open-heading" => "open-heading-requested",
+                        "close-heading" => "close-heading-requested",
+                        "show-headings" => "show-headings-requested",
                         "show-task-log" => "show-task-log-requested",
                         "close-tab" => "close-tab-requested",
                         "close-project-window" => "close-window-requested",

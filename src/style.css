@@ -176,3 +176,14 @@ body.focus-mode.history-chord-pending > footer {
 
 /* Focusable, non-editable target for the second stroke; never a text field. */
 .chord-input { position: fixed; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+.heading-dialog { width: min(560px, 90vw); max-height: 75vh; padding: 20px; border: 1px solid #cbd4cd; border-radius: 10px; color: #303b38; background: #f4f3ee; }
+.heading-dialog::backdrop { background: #172e2444; }
+.heading-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.heading-dialog h2 { margin: 0; font-size: 18px; }
+.heading-list { max-height: 55vh; overflow: auto; }
+.heading-list button { display: block; width: 100%; text-align: left; margin-bottom: 4px; overflow-wrap: anywhere; }
+.heading-list button[aria-current] { font-weight: 600; }
+.heading-list button:focus { outline: 2px solid #397459; outline-offset: -2px; background: #e6eee8; }
+
+.heading-fold-marker { padding: 0 6px; margin-left: 6px; font: inherit; line-height: 1; color: #718078; background: #edf0eb; border: 1px solid #d8ded8; border-radius: 4px; }
