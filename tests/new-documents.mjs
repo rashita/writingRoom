@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createEditorStateStore, editorKey } from '../src/editor-state.js';
 const source = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const saveSource = source.slice(source.indexOf('async function save(t = active)'), source.indexOf('async function openDashboard'));
 const closeSource = source.slice(source.indexOf('async function closeTab(tab)'), source.indexOf("await listen('close-tab-requested'"));
@@ -9,6 +10,7 @@ const listenerSource = source.slice(source.indexOf("await listen('new-document-r
 let selected = null, allowClose = false, failSave = false, listener;
 const calls = [];
 const context = {
+    editorStates: createEditorStateStore(), editorKey,
     session: { root: '/project' }, tabs: [], active: null,
     editQueue: Promise.resolve(), restoringTabs: false, tabPersistenceEnabled: true,
     tabStateQueue: Promise.resolve(), lastTabSnapshot: null, tabStateError: null,

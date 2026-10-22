@@ -1,4 +1,4 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#303b38;background:#f4f3ee;font-size:14px}*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column}button,select{font:inherit;border:1px solid #cbd4cd;border-radius:6px;background:#fff;padding:7px 12px;color:inherit;cursor:pointer}button:hover{background:#e6eee8}button:disabled{opacity:.5;cursor:default}nav{display:flex;gap:5px;padding:12px 20px 0;border-bottom:1px solid #d8ded8;min-height:48px;overflow:auto}nav button{border-radius:7px 7px 0 0;border-bottom:0;white-space:nowrap}nav button.active{background:#fff;color:#28614d;font-weight:600}.close{margin-left:12px;color:#7f8a83}main{flex:1;min-height:0;display:flex;flex-direction:column;background:#fff}.toolbar{padding:12px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e3e7e2}.toolbar .path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77827b}.welcome{margin:auto;max-width:600px;padding:40px;text-align:center}.welcome h1{font-family:Georgia,serif;font-size:42px;font-weight:400;color:#31604f}.welcome p{line-height:1.9;color:#77827b}.files{overflow:auto;padding:12px 20px}.row{display:flex;align-items:center;gap:12px;border-bottom:1px solid #edf0ed;padding:10px 4px}.row .name{flex:1;text-align:left;border:0;background:none}.row .meta{color:#859087;font-size:12px}.row button{font-size:12px}textarea{flex:1;resize:none;border:0;outline:none;padding:28px 40px;font:var(--editor-font-size, 16px)/1.9 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:4;color:#303b38;background:#fff}iframe{flex:1;width:100%;border:0}footer{height:30px;padding:5px 20px;display:flex;justify-content:space-between;font-size:12px;color:#718078;border-top:1px solid #d8ded8}.error{color:#a13d36}a{color:#316b55}.empty{padding:32px;color:#77827b}
+:root{font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#303b38;background:#f4f3ee;font-size:14px}*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column}button,select{font:inherit;border:1px solid #cbd4cd;border-radius:6px;background:#fff;padding:7px 12px;color:inherit;cursor:pointer}button:hover{background:#e6eee8}button:disabled{opacity:.5;cursor:default}nav{display:flex;gap:5px;padding:12px 20px 0;border-bottom:1px solid #d8ded8;min-height:48px;overflow:auto}nav button{border-radius:7px 7px 0 0;border-bottom:0;white-space:nowrap}nav button.active{background:#fff;color:#28614d;font-weight:600}.close{margin-left:12px;color:#7f8a83}main{flex:1;min-height:0;display:flex;flex-direction:column;background:#fff}.toolbar{padding:12px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e3e7e2}.toolbar .path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77827b}.welcome{margin:auto;max-width:600px;padding:40px;text-align:center}.welcome h1{font-family:Georgia,serif;font-size:42px;font-weight:400;color:#31604f}.welcome p{line-height:1.9;color:#77827b}.files{overflow:auto;padding:12px 20px}.row{display:flex;align-items:center;gap:12px;border-bottom:1px solid #edf0ed;padding:10px 4px}.row .name{flex:1;text-align:left;border:0;background:none}.row .meta{color:#859087;font-size:12px}.row button{font-size:12px}iframe{flex:1;width:100%;border:0}footer{height:30px;padding:5px 20px;display:flex;justify-content:space-between;font-size:12px;color:#718078;border-top:1px solid #d8ded8}.error{color:#a13d36}a{color:#316b55}.empty{padding:32px;color:#77827b}
 
 nav button.recent-project{color:#77847b;background:#edf0eb;font-weight:400}nav button.recent-project:hover{color:#31604f;background:#e0e9df}nav button.recent-project.unavailable{color:#9b8b82}nav button{user-select:none}
 
@@ -34,41 +34,55 @@ nav button.recent-project{color:#77847b;background:#edf0eb;font-weight:400}nav b
     max-width: none;
     max-height: none;
 }
-textarea {
-    width: 100%;
+.manuscript-editor {
+    flex: 1;
     min-height: 0;
+    width: 100%;
+    color: #303b38;
+    background: #fff;
+    font-size: var(--editor-font-size, 16px);
+}
+.manuscript-editor.cm-focused { outline: none; }
+.manuscript-editor .cm-scroller {
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    line-height: 1.9;
+}
+.manuscript-editor .cm-content {
     padding-block: 40px;
     padding-inline: max(24px, calc((100% - 44rem) / 2));
     caret-color: #7f9b8c;
 }
+.manuscript-editor .cm-line { padding: 0; }
+.manuscript-editor .cm-cursor { border-left-color: #7f9b8c; }
 
 /* A quiet scrollbar for the writing surface, including older WebKit. */
-textarea::-webkit-scrollbar {
+.manuscript-editor .cm-scroller::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-textarea::-webkit-scrollbar-track,
-textarea::-webkit-scrollbar-corner {
+.manuscript-editor .cm-scroller::-webkit-scrollbar-track,
+.manuscript-editor .cm-scroller::-webkit-scrollbar-corner {
     background: transparent;
 }
 
-textarea::-webkit-scrollbar-thumb {
+.manuscript-editor .cm-scroller::-webkit-scrollbar-thumb {
     background: #e3e7e4;
     border: 2px solid #fff;
     border-radius: 8px;
 }
 
-textarea::-webkit-scrollbar-thumb:hover {
+.manuscript-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
     background: #d1d9d3;
 }
 
 @supports (scrollbar-color: #e3e7e4 transparent) {
-    textarea {
+    .manuscript-editor .cm-scroller {
         scrollbar-color: #e3e7e4 transparent;
         scrollbar-width: thin;
     }
-    textarea:hover {
+    .manuscript-editor .cm-scroller:hover {
         scrollbar-color: #d1d9d3 transparent;
     }
 }

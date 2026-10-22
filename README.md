@@ -36,6 +36,20 @@ npm run build
 
 生成先は `src-tauri/target/release/bundle/macos/Writing Room.app` です。現在の設定では macOS の `.app` を生成します。署名・公証は設定していません。
 
+### CodeMirror 6 の管理
+
+CodeMirror 6 は他のツールでも利用するため、`/Users/Tadanori/cm6-build` で一元管理しています。このプロジェクトでは、その成果物を `src/cm-bundle.js` にコピーして運用します。`src` はアプリの配信対象ディレクトリです。テキスト編集欄はこのバンドルの CodeMirror 6 を使用しています。Markdown の装飾や折りたたみなどは追加せず、プレーンテキストとして編集します。
+
+バンドルを更新する場合は、共通管理側の `src/index.js`（エクスポート）や依存関係を必要に応じて変更し、次の手順でビルド・コピーします。
+
+```sh
+cd /Users/Tadanori/cm6-build
+npm run build
+cp dist/cm-bundle.js /Users/Tadanori/Dev/writingRoom/src/cm-bundle.js
+```
+
+生成済みの `src/cm-bundle.js` は直接編集せず、変更は共通管理側に反映してください。共通管理側の変更時は他の利用先への影響も確認します。このプロジェクトではコピーした成果物を Git で管理するため、通常の起動・アプリビルドに共通管理ディレクトリは不要です。
+
 ## 基本的な使い方
 
 1. ファイルメニューの「プロジェクトを開く…」（⌘O）からフォルダを選択します。直下に `.writingroom.json` を作成します。

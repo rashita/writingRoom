@@ -1,3 +1,5 @@
+import { createEditorStateStore, editorKey } from './editor-state.js';
+import { createEditor } from './editor.js';
 import { createChordInput } from './chord-input.js';
 import { createHistoryShortcuts } from './history-shortcuts.js';
 import { showHistory } from './history.js';
@@ -18,10 +20,10 @@ const win = getCurrentWindow();
 const content = document.querySelector('#content');
 const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
-// Kept only for this window's lifetime, including after a tab is closed.
-const editorPositions = new Map();
+const editorStates = createEditorStateStore();
+let manuscriptEditor = null;
 let rememberEditorPosition = () => {};
-const focusMode = createFocusMode(document.body, () => active?.kind === 'text' ? content.querySelector('textarea') : null);
+const focusMode = createFocusMode(document.body, () => active?.kind === 'text' ? manuscriptEditor : null);
 window.addEventListener('keydown', focusMode.handleKeydown);
 let editQueue = Promise.resolve();
 let recentProjects = [];
@@ -207,14 +209,20 @@ async function showTabMenu(tab) {
 }
 function toolbar(path) { const el = document.createElement('div'); el.className = 'toolbar'; const label = document.createElement('span'); label.className = 'path'; label.textContent = path || 'プロジェクト直下'; el.append(label); content.append(el); return el; }
 function focusEditor() {
-    const editor = content.querySelector('textarea');
-    if (!editor) return;
-    const { scrollTop, scrollLeft } = editor;
-    editor.focus({ preventScroll: true });
-    editor.scrollTop = scrollTop;
-    editor.scrollLeft = scrollLeft;
+    manuscriptEditor?.focus();
 }
-function render() { historyShortcuts.cancel(); rememberEditorPosition(); rememberEditorPosition = () => {}; focusMode.sync(); renderTabs(); content.replaceChildren(); updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null); if (!active) {
+function render() {
+    historyShortcuts.cancel();
+    rememberEditorPosition();
+    rememberEditorPosition = () => {};
+    editorStates.retain(tabs.filter(t => t.kind === 'text').map(t => editorKey(session.root, t)));
+    focusMode.sync();
+    manuscriptEditor?.destroy();
+    manuscriptEditor = null;
+    renderTabs();
+    content.replaceChildren();
+    updateCharacterCount(document.querySelector('#character-count'), active?.kind === 'text' ? active.doc.text : null);
+    if (!active) {
     const box = document.createElement('div');
     box.className = 'welcome';
     const h = document.createElement('h1');
@@ -260,22 +268,16 @@ function render() { historyShortcuts.cancel(); rememberEditorPosition(); remembe
     preview.append(image);
     content.append(preview);
 } if (t.kind === 'text') {
-    const editor = document.createElement('textarea');
-    editor.spellcheck = false;
-    editor.disabled = !!t.savingDraft;
-    editor.value = t.doc.text;
-    const positionKey = JSON.stringify([session.root, t.path, !!t.untitled]);
-    const position = editorPositions.get(positionKey) || { start: 0, end: 0, direction: 'none', top: 0, left: 0 };
-    editor.setSelectionRange(position.start, position.end, position.direction);
-    rememberEditorPosition = () => editorPositions.set(positionKey, {
-        start: editor.selectionStart, end: editor.selectionEnd, direction: editor.selectionDirection,
-        top: editor.scrollTop, left: editor.scrollLeft
+    const positionKey = editorKey(session.root, t);
+    manuscriptEditor = createEditor({
+        parent: content, text: t.doc.text, title: t.title, disabled: !!t.savingDraft,
+        saved: editorStates.get(positionKey),
+        onChange: text => { t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke(t.untitled ? 'update_draft' : 'update_document', { path: t.path, id: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); }
     });
-    editor.setAttribute('aria-label', t.title);
-    editor.addEventListener('input', () => { const text = editor.value; t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke(t.untitled ? 'update_draft' : 'update_document', { path: t.path, id: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); });
-    content.append(editor);
-    editor.scrollTop = position.top;
-    editor.scrollLeft = position.left;
+    const editor = manuscriptEditor;
+    rememberEditorPosition = () => {
+        editorStates.save(positionKey, editor.snapshot());
+    };
 } }
 async function renderFiles(t) { const bar = toolbar(t.path); const parent = t.path.split('/').slice(0, -1).join('/'); if (t.path)
     bar.append(button('↑ 上へ', () => openFolder(parent))); bar.append(button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
@@ -339,6 +341,7 @@ async function saveTextTab(t) {
             await editQueue;
             if (t.syncError) throw new Error(t.syncError);
             const doc = await invoke('save_draft', { id: t.path, path: selected });
+            editorStates.rename(editorKey(session.root, t), editorKey(session.root, { path: doc.path.slice(session.root.length + 1), untitled: false }));
             t.path = doc.path.slice(session.root.length + 1);
             t.doc = doc;
             t.title = t.path.split('/').at(-1);
@@ -584,9 +587,8 @@ await listen('document-changed', ({ payload: doc }) => { for (const t of tabs) {
     t.doc.original = doc.original;
     t.doc.text = doc.text;
     if (t === active) {
-        const editor = content.querySelector('textarea');
-        if (editor)
-            editor.value = doc.text;
+        manuscriptEditor?.setText(doc.text);
+        updateCharacterCount(document.querySelector('#character-count'), doc.text);
     }
 } renderTabs(); });
 await win.onCloseRequested(async (e) => { e.preventDefault(); try {
