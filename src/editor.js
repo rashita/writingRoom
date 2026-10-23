@@ -10,13 +10,23 @@ function textChange(old, text) {
 }
 
 // Plain text editing for now: no Markdown styling, completion or auto-indentation.
+// Handle Enter in CodeMirror so WebView paragraph editing cannot add extra breaks.
+function insertPlainNewline({ state, dispatch }) {
+    if (state.readOnly) return false;
+    dispatch(state.update(state.replaceSelection(state.lineBreak), {
+        scrollIntoView: true, userEvent: 'input.type'
+    }));
+    return true;
+}
+
 export function createEditor({ parent, text, title, disabled = false, saved, onChange }) {
     let receiving = false;
     const extensions = [
         history(),
         headingFolds,
         drawSelection(),
-        keymap.of([...historyKeymap, ...defaultKeymap.filter(binding =>
+        keymap.of([{ key: 'Enter', run: insertPlainNewline, shift: insertPlainNewline },
+            ...historyKeymap, ...defaultKeymap.filter(binding =>
             binding.key !== 'Enter' && binding.key !== 'Mod-Enter')]),
         EditorState.tabSize.of(4),
         EditorView.lineWrapping,

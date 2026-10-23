@@ -1,5 +1,27 @@
 # エディタの変更・動作確認メモ
 
+## 2026-10-23：Enterの改行を明示的に処理
+
+段落の間に空行がある状態で、前の段落末尾でEnterを押すと、期待より改行が多く増えるとの実機報告があった。従来は標準のEnterキー割り当てを除外するだけで、WebViewの入力に任せていた。
+
+`src/editor.js` でEnterとShift-Enterに、選択範囲を改行一つに置き換える処理を割り当てた。インデントは補わない。共通バンドルの変更はない。通常のkeymapを使うため、変換確定キーの除外はCodeMirror既存のIME処理を通る。
+
+段落末尾で改行が一つだけ増えること、カーソル位置、Undo、選択範囲の置換、字下げの非継承、読み取り専用を状態テストで確認。WebViewでの余分な改行の解消と日本語変換確定は実機確認が必要。
+
+### 原因の追加調査：WKWebViewで再現
+
+macOS 26.6.2のWKWebViewに、同じバンドルと修正前のキー設定を読み込み、ネイティブのEnterキーイベントを送って再現した（IMEなし）。`第一段落。\n\n第二段落。` の最初の段落末尾が対象。
+
+- `keydown: Enter` は一回。
+- WebKitの標準編集は `beforeinput/input: insertLineBreak` を発生させ、最初の行のDOMを `<div class="cm-line">第一段落。\n\n</div>` にした。もともとの後続の空行DOMも残る。
+- CodeMirrorは、このDOM中の改行二つと既存の行境界を読み取り、一回のトランザクションで `第一段落。\n\n\n\n第二段落。` に更新した。二つのハンドラがそれぞれ改行を挿入したわけではない。
+- 修正後のキー設定では、`keydown`からCodeMirrorが直接改行一つを挿入し、標準編集の `beforeinput/input` は発生しない。結果は `第一段落。\n\n\n第二段落。`。
+- 比較として `document.execCommand('insertParagraph')` では一つだけ増えた。実際のEnterの `insertLineBreak` と異なるため、これだけでは再現検証にならない。
+
+原因は、Enterを未処理にした際のWebKitのDOM編集と、それをそのまま文書に読み戻す経路の組み合わせ。WebKitが行末へ改行二つを入れる内部実装上の理由までは特定していない。修正はこの標準DOM編集経路を使わず、CodeMirrorの状態更新で改行数を決めるもの。日本語変換確定の実機確認は引き続き必要。
+
+再現用スクリプト: `tests/manual/enter-webkit.swift`。リポジトリ直下で `swift tests/manual/enter-webkit.swift`（修正前）、`swift tests/manual/enter-webkit.swift --fixed`（修正後）を実行する。一時ウィンドウを開いてイベント・DOM・文書を出力する。通常のテストとは別に手動実行する。
+
 ## 2026-10-22：カーソルと選択範囲の描画をCodeMirror側に変更
 
 ### 症状と調査
