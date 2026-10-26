@@ -218,6 +218,19 @@ fn execute_named_task(root: &str, id: &str) -> Result<TaskResult> {
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
 }
+fn launch_codex(window: &WebviewWindow, state: &State<Mutex<Store>>) -> Result<()> {
+    let root = session(window, state)?.root;
+    let output = std::process::Command::new("/usr/bin/open")
+        .args(["-na", "Ghostty", "--args"])
+        .arg("--window-save-state=never")
+        .arg(format!("--working-directory={root}"))
+        .args(["-e", "/bin/zsh", "-lic", "codex \"プロジェクトを開始します\""])
+        .output().map_err(|e| format!("Ghosttyを起動できません: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Ghosttyを起動できません: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    Ok(())
+}
 #[tauri::command]
 async fn run_named_task(window: WebviewWindow, app: tauri::AppHandle, state: State<'_, Mutex<Store>>, id: String) -> Result<TaskResult> {
     let root = session(&window, &state)?.root;
@@ -1164,9 +1177,19 @@ fn main() {
             let open_heading = MenuItem::with_id(app,"open-heading","直近の見出しを開く（⌘H → O）",true,None::<&str>)?;
             let navigation = SubmenuBuilder::new(app,"移動").item(&headings).item(&book_headings).item(&close_heading).item(&open_heading).separator().item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
             let view = SubmenuBuilder::new(app,"表示").item(&filer).separator().item(&increase).item(&decrease).item(&reset).separator().item(&focus).separator().item(&inspect).build()?;
-            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&view,&navigation]).build()
+            let codex = MenuItem::with_id(app,"launch-codex","codexを起動",true,None::<&str>)?;
+            let agent = SubmenuBuilder::new(app,"エージェント").item(&codex).build()?;
+            MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&agent,&view,&navigation]).build()
         })
         .on_menu_event(|app,event| {
+            if event.id().as_ref() == "launch-codex" {
+                if let Some(window) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) {
+                    if let Err(error) = launch_codex(&window, &app.state::<Mutex<Store>>()) {
+                        let _ = window.emit("history-error", error);
+                    }
+                }
+                return;
+            }
             if let Some(encoded) = event.id().as_ref().strip_prefix("named-task:") {
                 if let Ok((label, id)) = serde_json::from_str::<(String, String)>(encoded) {
                     if let Some(window) = app.get_webview_window(&label).filter(|w| w.is_focused().unwrap_or(false)) {
