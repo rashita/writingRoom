@@ -1,3 +1,4 @@
+import { startTypewriterTrace } from './editor-trace.js';
 import { getHeadings, showHeadingList } from './headings.js';
 import { createEditorStateStore, editorKey } from './editor-state.js';
 import { createEditor } from './editor.js';
@@ -22,6 +23,8 @@ const content = document.querySelector('#content');
 const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
 let draggedTab = null;
+window.startTypewriterTrace = startTypewriterTrace;
+let typewriterEnabled = false;
 const editorStates = createEditorStateStore();
 let manuscriptEditor = null;
 let closeHeadingList = () => {};
@@ -317,7 +320,7 @@ function render() {
     const positionKey = editorKey(session.root, t);
     manuscriptEditor = createEditor({
         parent: content, text: t.doc.text, title: t.title, disabled: !!t.savingDraft,
-        saved: editorStates.get(positionKey),
+        saved: editorStates.get(positionKey), typewriter: typewriterEnabled,
         onChange: text => { t.doc.text = text; updateCharacterCount(document.querySelector('#character-count'), text); t.pending = (t.pending || 0) + 1; renderTabs(); editQueue = editQueue.then(async () => { const result = await invoke(t.untitled ? 'update_draft' : 'update_document', { path: t.path, id: t.path, text, revision: t.doc.revision }); t.doc.revision = result.revision; t.doc.original = result.original; t.pending--; t.syncError = null; }).catch(error => { t.pending = Math.max(0, t.pending - 1); t.syncError = String(error); fail(error); }); }
     });
     const editor = manuscriptEditor;
@@ -663,6 +666,14 @@ async function recordCurrentProgress(tab = active) {
     } catch (error) { fail(error); }
 }
 await listen('record-progress-requested', () => recordCurrentProgress());
+const syncTypewriterMenu = () => invoke('sync_typewriter_menu', { enabled: typewriterEnabled }).catch(fail);
+window.addEventListener('focus', syncTypewriterMenu);
+await listen('typewriter-mode-requested', () => {
+    if (active?.kind !== 'text' || !manuscriptEditor) { syncTypewriterMenu(); return; }
+    typewriterEnabled = !typewriterEnabled;
+    manuscriptEditor.setTypewriter(typewriterEnabled);
+    syncTypewriterMenu();
+});
 await listen('focus-mode-requested', () => focusMode.toggle());
 const applyEditorFontSize = size => {
     document.documentElement.style.setProperty('--editor-font-size', `${size}px`);

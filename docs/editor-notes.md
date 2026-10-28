@@ -44,3 +44,19 @@ macOS 26.6.2のWKWebViewに、同じバンドルと修正前のキー設定を�
 ### 今後の調査時の参照点
 
 カーソル・選択範囲・日本語変換中の表示に問題が出た場合は、この描画方式の変更も確認対象にする。関連する見た目の設定は `src/style.css` の `.cm-content`（`caret-color`）と `.cm-cursor`。今回の確認は、すべての入力・表示条件での動作を保証するものではない。
+
+## 2026-10-28：タイプライターモードで日本語確定時に一瞬スクロールする
+
+実機報告：末尾で改行し、新しい行に最初の日本語入力を確定した瞬間だけ画面が動き、元の高さへ戻る。半角入力では発生せず、同じ行の次の日本語入力では発生しない。
+
+調査した経路：共通バンドルに含まれる CodeMirror のDOM入力の取り込みは `scrollIntoView: true` を要求する。compositionendでは未処理のDOM変更をmicrotaskで取り込むか、50ms後にcomposition viewを整理する。タイプライター側にもcompositionendから50ms後に中央寄せする処理がある。この前後にWebKitの選択・スクロール処理や行の高さの変化が挟まっている可能性はあるが、原因は未確定。
+
+`tests/manual/typewriter-webkit.swift` で、一時WKWebViewに同じバンドルとタイプライター処理を読み込み、末尾での改行、NSTextInputClientのsetMarkedTextとinsertTextを実行した。中央寄せ完了後のscrollTopは3030のままで、問題は再現しなかった。直接APIを呼ぶこのテストでは、Safari向けのCodeMirrorの補完処理が約20ms後にcompositionendを扱うため、実際の日本語IMEの再現とはみなせない。日本語IMEでのEnter確定は未検証。
+
+実機計測：開発者ツールのConsoleで `startTypewriterTrace()` を実行し、本文へ戻って20秒以内に再現する。本文や変換文字列は収集せず、入力イベント、DOM変更通知、スクロール位置、末尾行と選択範囲の高さ、JavaScriptからのscrollTop変更のスタックを記録する。20秒後にJSONをConsoleへ出力し、`window.typewriterTraceLog`にも保持する。途中で `stopTypewriterTrace()` を実行して停止できる。監視は自動開始しない。
+
+### 実機ログによる絞り込みと対策
+
+ユーザー提供ログでは、`beforeinput: deleteCompositionText` の時点のscrollTop 5031が、次のDOM変更通知とinputまでに4998へ変わった。JavaScriptからのscrollTop書き込みは記録されていない。同じ現象を複数回確認。scrollHeight、末尾行の高さ34px、上下余白68pxは、イベントの観測時点では変化していない。確定文字のinsertFromCompositionの後、compositionendから約70ms後にCodeMirrorのscrollIntoView経由の書き込みで5031へ戻っている。したがって最初の移動はWebView内部で起きる可能性が高く、単に中央寄せを繰り返していた前の不具合とは異なる。内部の削除処理中に瞬間的な高さの縮小があるか、選択追従なのかまではログだけでは分からない。
+
+タイプライター有効時のdeleteCompositionText直前にスクロール位置を記録し、deleteCompositionTextとinsertFromCompositionのinputで同期的に復元する対策を追加した。compositionendで記録を解放する。IMEのイベントはキャンセルせず、本文・DOM・選択範囲は変更しない。ホイール・ポインター操作・モード切り替えで復元を取り消す。回帰テストで実機ログの33pxの移動を模擬し、同期的に戻すことを確認。実際の日本語IMEでちらつきが消えたかは実機確認が必要。

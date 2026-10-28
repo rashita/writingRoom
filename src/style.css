@@ -207,3 +207,7 @@ body.focus-mode.history-chord-pending > footer {
 .heading-list button:focus { outline: 2px solid #397459; outline-offset: -2px; background: #e6eee8; }
 
 .heading-fold-marker { padding: 0 6px; margin-left: 6px; font: inherit; line-height: 1; color: #718078; background: #edf0eb; border: 1px solid #d8ded8; border-radius: 4px; }
+
+.manuscript-editor .cm-scroller.typewriter-mode .cm-content {
+    padding-block: var(--typewriter-padding, 40px);
+}

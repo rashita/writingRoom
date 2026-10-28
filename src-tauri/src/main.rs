@@ -1054,6 +1054,15 @@ fn adjusted_font_size(current: u8, action: &str) -> Result<u8> {
     }
 }
 #[tauri::command]
+fn sync_typewriter_menu(window: WebviewWindow, app: tauri::AppHandle, enabled: bool) -> Result<()> {
+    if !window.is_focused().map_err(|e| e.to_string())? { return Ok(()); }
+    if let Some(tauri::menu::MenuItemKind::Check(item)) = app.menu().and_then(|menu| menu.get("toggle-typewriter-mode")) {
+        item.set_checked(enabled).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_editor_font_size(state: State<Mutex<EditorPreferencesStore>>) -> Result<u8> {
     let store = state.lock().unwrap();
     if let Some(error) = &store.error { return Err(error.clone()); }
@@ -1139,7 +1148,7 @@ fn main() {
         })
         .plugin(tauri_plugin_dialog::init())
         .menu(|app| {
-            use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItem};
+            use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItem, CheckMenuItem};
             let quit = MenuItem::with_id(app,"quit-confirm","Writing Roomを終了",true,Some("CmdOrCtrl+Q"))?;
             let app_menu = SubmenuBuilder::new(app,"Writing Room").item(&quit).build()?;
             let edit = SubmenuBuilder::new(app,"編集").undo().redo().separator().cut().copy().paste().select_all().build()?;
@@ -1162,6 +1171,7 @@ fn main() {
             let project_history = MenuItem::with_id(app,"show-project-history","プロジェクトの履歴…",true,None::<&str>)?;
             let history = SubmenuBuilder::with_id(app,"history-menu","履歴").item(&track).item(&progress).item(&project_progress).separator().item(&document_history).item(&project_history).build()?;
             let inspect = MenuItem::with_id(app,"toggle-devtools","開発者ツールの表示／非表示",true,Some("CmdOrCtrl+Alt+I"))?;
+            let typewriter = CheckMenuItem::with_id(app,"toggle-typewriter-mode","タイプライターモード",true,false,None::<&str>)?;
             let focus = MenuItem::with_id(app,"toggle-focus-mode","全集中モード",true,Some("CmdOrCtrl+Alt+F"))?;
             let filer = MenuItem::with_id(app,"show-filer","ファイラー",true,None::<&str>)?;
             let increase = MenuItem::with_id(app,"font-increase","文字を大きくする",true,Some("CmdOrCtrl+="))?;
@@ -1176,7 +1186,7 @@ fn main() {
             let close_heading = MenuItem::with_id(app,"close-heading","直近の見出しを閉じる（⌘H → P）",true,None::<&str>)?;
             let open_heading = MenuItem::with_id(app,"open-heading","直近の見出しを開く（⌘H → O）",true,None::<&str>)?;
             let navigation = SubmenuBuilder::new(app,"移動").item(&headings).item(&book_headings).item(&close_heading).item(&open_heading).separator().item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
-            let view = SubmenuBuilder::new(app,"表示").item(&filer).separator().item(&increase).item(&decrease).item(&reset).separator().item(&focus).separator().item(&inspect).build()?;
+            let view = SubmenuBuilder::new(app,"表示").item(&filer).separator().item(&increase).item(&decrease).item(&reset).separator().item(&focus).item(&typewriter).separator().item(&inspect).build()?;
             let codex = MenuItem::with_id(app,"launch-codex","codexを起動",true,None::<&str>)?;
             let agent = SubmenuBuilder::new(app,"エージェント").item(&codex).build()?;
             MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&agent,&view,&navigation]).build()
@@ -1218,7 +1228,7 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "show-book-headings" | "show-filer" | "open-heading" | "close-heading" | "show-headings" | "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "show-book-headings" | "show-filer" | "open-heading" | "close-heading" | "show-headings" | "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "track-document" | "record-progress" | "record-project-progress" | "show-document-history" | "show-project-history" | "toggle-typewriter-mode" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
@@ -1240,6 +1250,7 @@ fn main() {
                         "record-progress" => "record-progress-requested",
                         "record-project-progress" => "record-project-progress-requested",
                         "track-document" => "track-document-requested",
+                        "toggle-typewriter-mode" => "typewriter-mode-requested",
                         "toggle-focus-mode" => "focus-mode-requested",
                         "font-increase" => "font-increase-requested",
                         "font-decrease" => "font-decrease-requested",
@@ -1290,7 +1301,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {

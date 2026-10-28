@@ -1,3 +1,4 @@
+import { createTypewriter } from './typewriter.js';
 import { headingFolds, closeHeading, openHeading } from './heading-fold.js';
 import { currentHeadingRange } from './headings.js';
 import { EditorState, EditorView, StateEffect, history, historyKeymap, defaultKeymap, keymap, drawSelection } from './cm-bundle.js';
@@ -19,8 +20,9 @@ function insertPlainNewline({ state, dispatch }) {
     return true;
 }
 
-export function createEditor({ parent, text, title, disabled = false, saved, onChange }) {
+export function createEditor({ parent, text, title, disabled = false, saved, typewriter = false, onChange }) {
     let receiving = false;
+    let typingMode;
     const extensions = [
         history(),
         headingFolds,
@@ -36,6 +38,7 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
         EditorView.editable.of(!disabled),
         EditorView.contentAttributes.of({ 'aria-label': title, spellcheck: 'false', autocapitalize: 'off' }),
         EditorView.updateListener.of(update => {
+            typingMode?.update(update);
             if (update.docChanged && !receiving) onChange(update.state.doc.toString());
         })
     ];
@@ -50,7 +53,9 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
         read: () => null,
         write: () => { view.scrollDOM.scrollTop = saved.top; view.scrollDOM.scrollLeft = saved.left; }
     });
+    typingMode = createTypewriter(view, typewriter);
     return {
+        setTypewriter: enabled => typingMode.setEnabled(enabled),
         focus(position) {
             const scrollTop = position?.top ?? view.scrollDOM.scrollTop;
             const scrollLeft = position?.left ?? view.scrollDOM.scrollLeft;
@@ -79,6 +84,7 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
             const anchor = Math.max(0, Math.min(position, view.state.doc.length));
             view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: 'start', yMargin: 12 }) });
             view.focus();
+            typingMode.center();
         },
         snapshot: () => ({ state: view.state, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }),
         setText(text) {
@@ -89,6 +95,6 @@ export function createEditor({ parent, text, title, disabled = false, saved, onC
             try { view.dispatch({ changes: textChange(old, text) }); }
             finally { receiving = false; }
         },
-        destroy: () => view.destroy()
+        destroy: () => { typingMode.destroy(); view.destroy(); }
     };
 }

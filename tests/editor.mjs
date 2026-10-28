@@ -34,7 +34,7 @@ class TestView {
     focus() { this.focused = true; }
     destroy() { this.destroyed = true; }
 }
-const context = vm.createContext({ ...cm, headingFolds, closeHeading, openHeading, currentHeadingRange, EditorView: TestView });
+const context = vm.createContext({ ...cm, headingFolds, closeHeading, openHeading, currentHeadingRange, EditorView: TestView, createTypewriter: () => ({ update() {}, center() {}, setEnabled() {}, destroy() {} }) });
 const source = fs.readFileSync(new URL('../src/editor.js', import.meta.url), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export function', 'function');
 vm.runInContext(source, context);
