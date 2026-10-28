@@ -220,11 +220,8 @@ fn execute_named_task(root: &str, id: &str) -> Result<TaskResult> {
 }
 fn launch_codex(window: &WebviewWindow, state: &State<Mutex<Store>>) -> Result<()> {
     let root = session(window, state)?.root;
-    let output = std::process::Command::new("/usr/bin/open")
-        .args(["-na", "Ghostty", "--args"])
-        .arg("--window-save-state=never")
-        .arg(format!("--working-directory={root}"))
-        .args(["-e", "/bin/zsh", "-lic", "codex \"プロジェクトを開始します\""])
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", include_str!("launch-codex.applescript"), "--", &root])
         .output().map_err(|e| format!("Ghosttyを起動できません: {e}"))?;
     if !output.status.success() {
         return Err(format!("Ghosttyを起動できません: {}", String::from_utf8_lossy(&output.stderr).trim()));
@@ -1194,9 +1191,12 @@ fn main() {
         .on_menu_event(|app,event| {
             if event.id().as_ref() == "launch-codex" {
                 if let Some(window) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) {
-                    if let Err(error) = launch_codex(&window, &app.state::<Mutex<Store>>()) {
-                        let _ = window.emit("history-error", error);
-                    }
+                    let app = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(error) = launch_codex(&window, &app.state::<Mutex<Store>>()) {
+                            let _ = window.emit("history-error", error);
+                        }
+                    });
                 }
                 return;
             }

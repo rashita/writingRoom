@@ -70,7 +70,7 @@ cp dist/cm-bundle.js /Users/Tadanori/Dev/writingRoom/src/cm-bundle.js
 
 ### 外部エージェントの起動（テスト）
 
-プロジェクトを開いた状態で「エージェント → codexを起動」を選ぶと、Ghosttyを新しいインスタンスで開き、そのプロジェクトフォルダで `codex "プロジェクトを開始します"` を実行します。GhosttyとCodex CLIのインストールが必要です。`/bin/zsh -lic` を通して起動します。未保存の原稿は自動保存しません。
+プロジェクトを開いた状態で「エージェント → codexを起動」を選ぶと、AppleScript経由でGhosttyに新しいウィンドウを作成し、そのプロジェクトフォルダで `codex "プロジェクトを開始します"` を実行します。起動済みのGhosttyがあれば、そのインスタンスを使います。AppleScript対応のGhostty（1.3.0以降）とCodex CLIのインストールが必要です。初回はmacOSからGhosttyの操作許可を求められることがあります。`/bin/zsh -lic` を通して起動します。未保存の原稿は自動保存しません。
 
 ## 基本的な使い方
 
