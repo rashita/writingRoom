@@ -678,6 +678,69 @@ fn create_folder_in(root: &str, folder: &str, name: &str) -> Result<()> {
 fn create_folder(window: WebviewWindow, state: State<Mutex<Store>>, folder: String, name: String) -> Result<()> {
     create_folder_in(&session(&window, &state)?.root, &folder, &name)
 }
+#[cfg(target_os = "macos")]
+fn rename_directory_exclusive(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    extern "C" { fn renamex_np(from: *const std::os::raw::c_char, to: *const std::os::raw::c_char, flags: u32) -> i32; }
+    let from = std::ffi::CString::new(source.as_os_str().as_bytes())?;
+    let to = std::ffi::CString::new(target.as_os_str().as_bytes())?;
+    // macOS RENAME_EXCL refuses existing destinations atomically.
+    if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 0x00000004) } == 0 { Ok(()) }
+    else { Err(std::io::Error::last_os_error()) }
+}
+#[cfg(not(target_os = "macos"))]
+fn rename_directory_exclusive(_source: &Path, _target: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "このOSではフォルダ名変更に対応していません"))
+}
+fn rename_file_in(root: &str, path: &str, name: &str, store: &mut Store) -> Result<String> {
+    rename_entry_in(root, path, name, false, store)
+}
+fn rename_entry_in(root: &str, path: &str, name: &str, directory: bool, store: &mut Store) -> Result<String> {
+    if name.trim().is_empty() || name.starts_with('.') || name.contains('/') || name.contains('\\') || name.chars().any(char::is_control) {
+        return Err("名前を入力してください（先頭のドット、/、\\、制御文字は使えません）".into());
+    }
+    if fs::symlink_metadata(Path::new(root).join(path)).map_err(|e| e.to_string())?.file_type().is_symlink() {
+        return Err("シンボリックリンクの名前変更には対応していません".into());
+    }
+    let source = scoped(root, path)?;
+    if source == Path::new(root) { return Err("プロジェクトのルートは変更できません".into()); }
+    if (directory && !source.is_dir()) || (!directory && !source.is_file()) { return Err("対象の種類が変更されています。一覧を更新してください".into()); }
+    let target = source.parent().ok_or("親フォルダがありません")?.join(name);
+    let new_path = target.strip_prefix(Path::new(root)).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    if source == target { return Ok(new_path); }
+    // Creating the destination link exclusively prevents overwriting even during a race.
+    let result = if directory { rename_directory_exclusive(&source, &target) } else { fs::hard_link(&source, &target) };
+    result.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists { "同じ名前のファイルまたはフォルダがすでにあります".to_string() }
+        else { format!("ファイル名を変更できません: {e}") }
+    })?;
+    if let Err(error) = if directory { Ok(()) } else { fs::remove_file(&source) } {
+        let _ = fs::remove_file(&target);
+        return Err(format!("ファイル名を変更できません: {error}"));
+    }
+    let moved: Vec<_> = store.docs.keys().filter(|key| Path::new(key).as_os_str() == source.as_os_str() || (directory && Path::new(key).starts_with(&source))).cloned().collect();
+    for key in moved {
+        let mut doc = store.docs.remove(&key).unwrap();
+        doc.path = target.join(Path::new(&key).strip_prefix(&source).unwrap()).to_string_lossy().trim_end_matches('/').to_string();
+        store.docs.insert(doc.path.clone(), doc);
+    }
+    for session in store.sessions.values_mut() {
+        if session.root == root {
+            if let Some(file) = session.file.as_mut() {
+                if file == path || (directory && file.starts_with(&format!("{path}/"))) { *file = format!("{new_path}{}", &file[path.len()..]); }
+            }
+        }
+    }
+    Ok(new_path)
+}
+#[tauri::command]
+fn rename_file(window: WebviewWindow, app: tauri::AppHandle, state: State<Mutex<Store>>, path: String, name: String, directory: Option<bool>) -> Result<String> {
+    let root = session(&window, &state)?.root;
+    let directory = directory.unwrap_or(false);
+    let new_path = if directory { rename_entry_in(&root, &path, &name, true, &mut lock(&state))? } else { rename_file_in(&root, &path, &name, &mut lock(&state))? };
+    let _ = app.emit("file-renamed", serde_json::json!({ "root": root, "path": path, "newPath": new_path, "directory": directory }));
+    Ok(new_path)
+}
 #[tauri::command]
 fn list_files(
     window: WebviewWindow,
@@ -1318,7 +1381,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, rename_file, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -1510,6 +1573,60 @@ mod tests {
         assert!(validate_tasks(&[NamedTask { id: "other".into(), command: "  ".into(), ..task.clone() }]).is_err());
         assert!(validate_tasks(&[task.clone(), NamedTask { id: "other".into(), label: " PDFを作る ".into(), ..task }]).is_err());
         validate_tasks(&[]).unwrap();
+    }
+    #[test]
+    fn renaming_preserves_unsaved_documents_and_refuses_collisions() {
+        let dir = std::env::temp_dir().join(format!("writingroom-rename-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let root = dir.to_str().unwrap();
+        let source = dir.join("原稿.md");
+        fs::write(&source, "saved").unwrap();
+        fs::write(dir.join("existing.md"), "keep").unwrap();
+        let mut store = Store::default();
+        store.docs.insert(source.to_string_lossy().into_owned(), Doc { path: source.to_string_lossy().into_owned(), text: "unsaved".into(), original: "saved".into(), revision: 3 });
+        for name in ["existing.md", "../escape.md", "", ".", "a/b", "a\\b"] {
+            assert!(rename_file_in(root, "原稿.md", name, &mut store).is_err());
+            assert!(source.exists());
+        }
+        assert_eq!(rename_file_in(root, "原稿.md", "原稿.md", &mut store).unwrap(), "原稿.md");
+        assert_eq!(rename_file_in(root, "原稿.md", "新しい名前.md", &mut store).unwrap(), "新しい名前.md");
+        assert!(!source.exists());
+        let target = dir.join("新しい名前.md");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "saved");
+        let doc = store.docs.get(target.to_str().unwrap()).unwrap();
+        assert_eq!(doc.text, "unsaved");
+        assert_eq!(doc.original, "saved");
+        assert_eq!(doc.revision, 3);
+        assert_eq!(fs::read_to_string(dir.join("existing.md")).unwrap(), "keep");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn folder_rename_updates_descendants_and_refuses_existing_directories() {
+        let dir = std::env::temp_dir().join(format!("writingroom-folder-rename-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(dir.join("old/nested")).unwrap();
+        fs::create_dir_all(dir.join("existing")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let root = dir.to_str().unwrap();
+        let source = dir.join("old/nested/draft.md");
+        fs::write(&source, "saved").unwrap();
+        let mut store = Store::default();
+        store.docs.insert(source.to_string_lossy().into_owned(), Doc { path: source.to_string_lossy().into_owned(), text: "unsaved".into(), original: "saved".into(), revision: 5 });
+        store.sessions.insert("child".into(), Session { root: root.into(), parent: Some("main".into()), file: Some("old/nested/draft.md".into()) });
+        assert!(rename_entry_in(root, "old", "existing", true, &mut store).is_err());
+        assert!(rename_entry_in(root, "", "renamed-root", true, &mut store).is_err());
+        assert!(rename_entry_in(root, "old", "../escape", true, &mut store).is_err());
+        assert_eq!(rename_entry_in(root, "old", "新しい章", true, &mut store).unwrap(), "新しい章");
+        let target = dir.join("新しい章/nested/draft.md");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "saved");
+        let doc = store.docs.get(target.to_str().unwrap()).unwrap();
+        assert_eq!(doc.text, "unsaved");
+        assert_eq!(doc.revision, 5);
+        assert_eq!(store.sessions["child"].file.as_deref(), Some("新しい章/nested/draft.md"));
+        assert!(!dir.join("old").exists());
+        assert!(dir.join("existing").is_dir());
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn numbered_creation_preserves_existing_files_and_project_boundary() {

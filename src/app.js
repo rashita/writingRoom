@@ -175,7 +175,7 @@ function renderTabs() {
         tabs.splice(tabs.indexOf(t) + (after ? 1 : 0), 0, moved);
         renderTabs();
     });
-    if (!t.untitled && (t.kind === 'text' || t.kind === 'html')) {
+    if (!t.untitled && ['text', 'html', 'image', 'pdf'].includes(t.kind)) {
         b.addEventListener('keydown', event => {
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
                 event.preventDefault();
@@ -205,6 +205,7 @@ async function closeTab(tab) {
     if (tab.untitled) await invoke('discard_draft', { id: tab.path });
     tabs = tabs.filter(t => t !== tab);
     if (tab.contextMenu) await tab.contextMenu.close();
+    if (tab.filerMenu) await tab.filerMenu.close();
     if (active === tab) active = tabs.at(-1);
     render();
 }
@@ -249,7 +250,7 @@ async function openProjectRoot(root, newWindow = false) {
 }
 async function showTabMenu(tab) {
     if (!tab.contextMenu) {
-        tab.contextMenu = await Menu.new({ items: [{
+        tab.contextMenu = await Menu.new({ items: [{ id: `tab-rename-${tab.id}`, text: 'ファイル名変更', action: () => renameFile(tab) }, ...(['text', 'html'].includes(tab.kind) ? [{
             id: `tab-action-${tab.id}`,
             text: tab.kind === 'html' ? 'ソースを編集' : '子ウィンドウで開く',
             action: () => (async () => {
@@ -258,7 +259,7 @@ async function showTabMenu(tab) {
                 if (tab.syncError) throw new Error(tab.syncError);
                 await invoke('open_child', { path: tab.path });
             })().catch(fail)
-        }, ...(tab.kind === 'text' ? [{
+        }] : []), ...(tab.kind === 'text' ? [{
             id: `tab-finder-${tab.id}`,
             text: 'Finderで開く',
             action: () => invoke('reveal_in_finder', { path: tab.path }).catch(fail)
@@ -268,6 +269,70 @@ async function showTabMenu(tab) {
     if (!tabButton) return;
     const bounds = tabButton.getBoundingClientRect();
     await tab.contextMenu.popup(new LogicalPosition(bounds.left, bounds.bottom), win);
+}
+function applyFileRename({ root, path, newPath, directory = false }) {
+    if (session?.root !== root || path === newPath) return;
+    rememberEditorPosition();
+    rememberEditorPosition = () => {};
+    const matches = value => value === path || (directory && value?.startsWith(path + '/'));
+    for (const tab of tabs.filter(t => !t.untitled && matches(t.path))) {
+        const target = newPath + tab.path.slice(path.length);
+        editorStates.rename(editorKey(root, tab), editorKey(root, { ...tab, path: target }));
+        tab.path = target;
+        tab.title = target.split('/').at(-1);
+        if (tab.doc) tab.doc.path = `${root}/${target}`;
+        if (tab.kind === 'html') tab.folder = target.split('/').slice(0, -1).join('/');
+    }
+    if (matches(session.file)) session.file = newPath + session.file.slice(path.length);
+    render();
+}
+await listen('file-renamed', ({ payload }) => applyFileRename(payload));
+function renameFile(tab, entry = null) {
+    if (document.querySelector('dialog[open]') || !tabs.includes(tab)) return;
+    const directory = !!entry?.directory;
+    const title = entry?.name ?? tab.title;
+    const originalPath = entry?.path ?? tab.path;
+    const root = session.root;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'new-folder-dialog';
+    dialog.innerHTML = `<form><h2>ファイル名変更</h2><label for="rename-file-name">ファイル名（拡張子を含む）</label><input id="rename-file-name" required autocomplete="off"><div role="alert"></div><div class="actions"><button type="button">キャンセル</button><button type="submit">変更</button></div></form>`;
+    dialog.querySelector('h2').textContent = directory ? 'フォルダ名変更' : 'ファイル名変更';
+    dialog.querySelector('label').textContent = directory ? 'フォルダ名' : 'ファイル名（拡張子を含む）';
+    const input = dialog.querySelector('input');
+    input.value = title;
+    const buttons = [...dialog.querySelectorAll('button')];
+    let busy = false;
+    buttons[0].onclick = () => dialog.close();
+    dialog.addEventListener('close', () => { dialog.remove(); focusEditor(); });
+    dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+    dialog.querySelector('form').onsubmit = async event => {
+        event.preventDefault();
+        if (busy || !input.value.trim()) return;
+        busy = true;
+        buttons.forEach(b => b.disabled = true);
+        input.disabled = true;
+        try {
+            await editQueue;
+            if (!tabs.includes(tab) || session.root !== root) throw new Error('操作対象のプロジェクトが閉じられました');
+            if (tab.savePromise) await tab.savePromise;
+            if (tab.syncError) throw new Error(tab.syncError);
+            const path = entry ? originalPath : tab.path;
+            const newPath = await invoke('rename_file', { path, name: input.value.trim(), directory });
+            applyFileRename({ root, path, newPath, directory });
+            dialog.close();
+        } catch (error) {
+            dialog.querySelector('[role="alert"]').textContent = String(error);
+        } finally {
+            busy = false;
+            buttons.forEach(b => b.disabled = false);
+            input.disabled = false;
+            if (dialog.open) input.focus();
+        }
+    };
+    document.body.append(dialog);
+    dialog.showModal();
+    input.focus();
+    input.setSelectionRange(0, !directory && title.lastIndexOf('.') > 0 ? title.lastIndexOf('.') : title.length);
 }
 function toolbar(path) { const el = document.createElement('div'); el.className = 'toolbar'; const label = document.createElement('span'); label.className = 'path'; label.textContent = path || `プロジェクト直下（${session.root}）`; label.title = path || session.root; el.append(label); content.append(el); return el; }
 function focusEditor() {
@@ -392,6 +457,21 @@ async function renderFiles(t) { const bar = toolbar(t.path); bar.classList.add('
         row.className = 'row';
         const name = button(`${entry.directory ? '▸' : '·'}  ${entry.name}${entry.directory ? '/' : ''}`, event => entry.directory ? navigateFolder(t, entry.path, event.metaKey) : openFile(entry.path));
         name.className = 'name';
+        const showMenu = async () => {
+            if (t.filerMenu) await t.filerMenu.close();
+            const menu = t.filerMenu = await Menu.new({ items: [{
+                id: 'filer-rename', text: entry.directory ? 'フォルダ名変更' : 'ファイル名変更',
+                action: () => renameFile(t, entry)
+            }] });
+            const bounds = name.getBoundingClientRect();
+            await menu.popup(new LogicalPosition(bounds.left, bounds.bottom), win);
+        };
+        row.addEventListener('contextmenu', event => { event.preventDefault(); showMenu().catch(fail); });
+        name.addEventListener('keydown', event => {
+            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                event.preventDefault(); showMenu().catch(fail);
+            }
+        });
         const meta = document.createElement('span');
         meta.className = 'meta';
         meta.textContent = entry.directory ? 'フォルダ' : `${Math.ceil(entry.size / 1024)} KB`;

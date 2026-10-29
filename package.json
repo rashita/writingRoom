@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "check": "node --check src/app.js",
-    "test": "node tests/heading-shortcuts.mjs && node tests/headings.mjs && node tests/editor.mjs && node tests/typewriter.mjs && node tests/chord-input.mjs && node tests/history-shortcuts.mjs && node tests/new-documents.mjs && node tests/tab-restore.mjs && node tests/focus-mode.mjs && node tests/character-count.mjs && node tests/numbered-navigation.mjs && node tests/named-tasks.mjs && cargo test --manifest-path src-tauri/Cargo.toml"
+    "test": "node tests/heading-shortcuts.mjs && node tests/headings.mjs && node tests/editor.mjs && node tests/typewriter.mjs && node tests/chord-input.mjs && node tests/history-shortcuts.mjs && node tests/new-documents.mjs && node tests/file-rename.mjs && node tests/tab-restore.mjs && node tests/focus-mode.mjs && node tests/character-count.mjs && node tests/numbered-navigation.mjs && node tests/named-tasks.mjs && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
