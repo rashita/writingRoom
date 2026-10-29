@@ -269,7 +269,7 @@ async function showTabMenu(tab) {
     const bounds = tabButton.getBoundingClientRect();
     await tab.contextMenu.popup(new LogicalPosition(bounds.left, bounds.bottom), win);
 }
-function toolbar(path) { const el = document.createElement('div'); el.className = 'toolbar'; const label = document.createElement('span'); label.className = 'path'; label.textContent = path || 'プロジェクト直下'; el.append(label); content.append(el); return el; }
+function toolbar(path) { const el = document.createElement('div'); el.className = 'toolbar'; const label = document.createElement('span'); label.className = 'path'; label.textContent = path || `プロジェクト直下（${session.root}）`; label.title = path || session.root; el.append(label); content.append(el); return el; }
 function focusEditor() {
     manuscriptEditor?.focus();
 }
@@ -342,8 +342,44 @@ function render() {
         editorStates.save(positionKey, editor.snapshot());
     };
 } }
+function createFolder(t) {
+    if (document.querySelector('dialog[open]')) return;
+    const folder = t.path;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'new-folder-dialog';
+    dialog.innerHTML = `<form><h2>新しいフォルダを作る</h2><p></p><label for="new-folder-name">フォルダ名</label><input id="new-folder-name" required autocomplete="off"><div role="alert"></div><div class="actions"><button type="button">キャンセル</button><button type="submit">作成</button></div></form>`;
+    dialog.querySelector('p').textContent = `作成先：${folder ? folder + '/' : 'プロジェクト直下'}`;
+    const input = dialog.querySelector('input');
+    const buttons = [...dialog.querySelectorAll('button')];
+    let busy = false;
+    buttons[0].onclick = () => dialog.close();
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+    dialog.querySelector('form').onsubmit = async event => {
+        event.preventDefault();
+        if (busy || !input.value.trim()) return;
+        busy = true;
+        buttons.forEach(button => button.disabled = true);
+        input.disabled = true;
+        try {
+            await invoke('create_folder', { folder, name: input.value.trim() });
+            dialog.close();
+            if (active === t && t.path === folder) await render();
+        } catch (error) {
+            dialog.querySelector('[role="alert"]').textContent = String(error);
+        } finally {
+            busy = false;
+            buttons.forEach(button => button.disabled = false);
+            input.disabled = false;
+            if (dialog.open) input.focus();
+        }
+    };
+    document.body.append(dialog);
+    dialog.showModal();
+    input.focus();
+}
 async function renderFiles(t) { const bar = toolbar(t.path); bar.classList.add('filer-toolbar'); const parent = t.path.split('/').slice(0, -1).join('/'); if (t.path)
-    bar.append(button('↑ 上へ', event => navigateFolder(t, parent, event.metaKey))); bar.append(button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
+    bar.append(button('↑ 上へ', event => navigateFolder(t, parent, event.metaKey))); bar.append(button('新しいフォルダ', () => createFolder(t)), button('ダッシュボード', () => openDashboard(t.path, true)), button('HTMLを選ぶ…', () => chooseDashboard(t.path)), button('更新', () => render())); const list = document.createElement('div'); list.className = 'files'; content.append(list); try {
     const entries = await invoke('list_files', { folder: t.path });
     if (active !== t)
         return;
@@ -354,7 +390,7 @@ async function renderFiles(t) { const bar = toolbar(t.path); bar.classList.add('
     for (const entry of entries) {
         const row = document.createElement('div');
         row.className = 'row';
-        const name = button(`${entry.directory ? '▸' : '·'}  ${entry.name}`, event => entry.directory ? navigateFolder(t, entry.path, event.metaKey) : openFile(entry.path));
+        const name = button(`${entry.directory ? '▸' : '·'}  ${entry.name}${entry.directory ? '/' : ''}`, event => entry.directory ? navigateFolder(t, entry.path, event.metaKey) : openFile(entry.path));
         name.className = 'name';
         const meta = document.createElement('span');
         meta.className = 'meta';
@@ -486,7 +522,7 @@ else {
     await openDashboard('');
 }
     restoringTabs = false;
-    status(session.root);
+    status('');
     rememberTabs();
     await invoke('refresh_task_menu');
     if (missing.length) await message(`復元できなかったタブがあります。\n\n${missing.join('\n')}`, { title: 'タブの復元', kind: 'warning' });

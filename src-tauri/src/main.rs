@@ -661,6 +661,23 @@ fn get_manuscript_folder(window: WebviewWindow, state: State<Mutex<Store>>) -> R
     let root = session(&window, &state)?.root;
     Ok(config(&root)?.manuscript_folder.unwrap_or_else(|| "Drafts".into()))
 }
+fn create_folder_in(root: &str, folder: &str, name: &str) -> Result<()> {
+    if name.trim().is_empty() || name.starts_with('.') || name.contains('/') || name.contains('\\') || name.chars().any(char::is_control) {
+        return Err("フォルダ名を入力してください（先頭のドット、/、\\、制御文字は使えません）".into());
+    }
+    let parent = scoped(root, folder)?;
+    fs::create_dir(parent.join(name)).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            "同じ名前のファイルまたはフォルダがすでにあります".into()
+        } else {
+            format!("フォルダを作成できません: {error}")
+        }
+    })
+}
+#[tauri::command]
+fn create_folder(window: WebviewWindow, state: State<Mutex<Store>>, folder: String, name: String) -> Result<()> {
+    create_folder_in(&session(&window, &state)?.root, &folder, &name)
+}
 #[tauri::command]
 fn list_files(
     window: WebviewWindow,
@@ -1301,7 +1318,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, progress::track_document, progress::preview_progress, progress::commit_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -1342,6 +1359,25 @@ fn decode(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn folders_are_created_in_selected_parent_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("writingroom-folders-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(dir.join("drafts")).unwrap();
+        let root = dir.to_str().unwrap();
+        create_folder_in(root, "", "資料").unwrap();
+        create_folder_in(root, "drafts", "第一章").unwrap();
+        assert!(dir.join("資料").is_dir());
+        assert!(dir.join("drafts/第一章").is_dir());
+        fs::write(dir.join("existing"), "keep").unwrap();
+        assert!(create_folder_in(root, "", "existing").is_err());
+        assert!(create_folder_in(root, "drafts", "第一章").is_err());
+        for name in ["", " ", ".", "..", ".hidden", "../escape", "a/b", "a\\b", "a\n"] {
+            assert!(create_folder_in(root, "", name).is_err(), "{name:?}");
+        }
+        assert!(create_folder_in(root, "..", "escape").is_err());
+        assert!(create_folder_in(root, "missing", "child").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn internal_outputs_reload_clean_documents_and_preserve_unsaved_edits() {
         let dir = std::env::temp_dir().join(format!("writingroom-internal-output-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));

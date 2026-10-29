@@ -211,3 +211,10 @@ body.focus-mode.history-chord-pending > footer {
 .manuscript-editor .cm-scroller.typewriter-mode .cm-content {
     padding-block: var(--typewriter-padding, 40px);
 }
+
+.new-folder-dialog { width: min(440px, 90vw); padding: 24px; border: 1px solid #cbd4cd; border-radius: 8px; color: #303b38; background: #f4f3ee; }
+.new-folder-dialog h2 { margin-top: 0; }
+.new-folder-dialog p { overflow-wrap: anywhere; }
+.new-folder-dialog input { display: block; box-sizing: border-box; width: 100%; margin: 8px 0 16px; padding: 8px; font: inherit; user-select: text; }
+.new-folder-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.new-folder-dialog [role="alert"] { color: #a13d36; white-space: pre-wrap; }
