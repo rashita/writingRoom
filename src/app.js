@@ -56,7 +56,16 @@ async function flushTabState() {
     await tabStateQueue;
     if (tabStateError) throw tabStateError;
 }
-const status = (text, error = false) => { const el = document.querySelector('#status'); el.textContent = text; el.classList.toggle('error', error); };
+let statusTimer;
+let statusExpiresAt = 0;
+const status = (text, error = false, duration = 0) => {
+    clearTimeout(statusTimer);
+    statusExpiresAt = duration ? Date.now() + duration : 0;
+    const el = document.querySelector('#status');
+    el.textContent = text;
+    el.classList.toggle('error', error);
+    if (duration) statusTimer = setTimeout(() => status(''), duration);
+};
 const fail = error => { status(String(error), true); return message(String(error), { title: 'Writing Room', kind: 'error' }); };
 const chordHint = 'K：この原稿を記録 ／ L：この原稿の履歴 ／ Esc：キャンセル';
 let statusBeforeChord;
@@ -65,12 +74,17 @@ function waitForChord(hint, enabled) {
     const el = document.querySelector('#status');
     document.body.classList.toggle('history-chord-pending', enabled);
     if (enabled) {
-        statusBeforeChord = { text: el.textContent, error: el.classList.contains('error') };
+        statusBeforeChord = { text: el.textContent, error: el.classList.contains('error'), expiresAt: statusExpiresAt };
         status(hint);
         chordInput.begin();
     } else {
         chordInput.end();
-        if (el.textContent === hint) status(statusBeforeChord.text, statusBeforeChord.error);
+        if (el.textContent === hint) {
+            const { text, error, expiresAt } = statusBeforeChord;
+            const remaining = expiresAt ? expiresAt - Date.now() : 0;
+            if (expiresAt && remaining <= 0) status('');
+            else status(text, error, remaining);
+        }
     }
 }
 const historyShortcuts = createHistoryShortcuts({
@@ -79,7 +93,7 @@ const historyShortcuts = createHistoryShortcuts({
     waiting: enabled => waitForChord(chordHint, enabled),
     record: tab => recordCurrentProgress(tab),
     history: tab => {
-        if (tab.untitled) { status('履歴を確認するには、原稿を保存してください。', true); return; }
+        if (tab.untitled) { message('履歴を確認するには、原稿を保存してください。', { title: '原稿の履歴' }); return; }
         showHistory({ path: tab.path, invoke }).catch(fail);
     }
 });
@@ -89,8 +103,8 @@ const headingShortcuts = createChordShortcuts({
     getContext: () => active?.kind === 'text' && !active.savingDraft && !document.querySelector('dialog[open]') ? manuscriptEditor : null,
     waiting: enabled => waitForChord(headingHint, enabled),
     actions: {
-        p: editor => { if (!editor.closeCurrentHeading()) status('閉じられる見出しの本文がありません。'); },
-        o: editor => { if (!editor.openCurrentHeading()) status('この見出しは閉じていません。'); }
+        p: editor => { editor.closeCurrentHeading(); },
+        o: editor => { editor.openCurrentHeading(); }
     }
 });
 function cancelShortcuts() { historyShortcuts.cancel(); headingShortcuts.cancel(); }
@@ -412,7 +426,6 @@ async function saveTextTab(t) {
         }
     } else t.doc = await invoke('save_document', { path: t.path });
     renderTabs();
-    status(`${t.title} を保存しました`);
     return true;
 }
 async function openDashboard(folder, explicit = false) { let path = await invoke('dashboard', { folder, selection: null, disable: false, create: false }); if (!path) {
@@ -428,7 +441,6 @@ async function openDashboard(folder, explicit = false) { let path = await invoke
     }
     else {
         await invoke('dashboard', { folder, selection: null, disable: true, create: false });
-        status('ダッシュボードは表示しません。ファイラーから後で追加できます。');
         return;
     }
 } addTab({ kind: 'html', path, folder, title: folder ? `${folder.split('/').at(-1)} / 概要` : 'ダッシュボード' }); }
@@ -525,7 +537,7 @@ const navigateNumbered = createNumberedNavigation({ getActive: () => active?.unt
         }
         render();
         focusEditor();
-    }, status });
+    }, message });
 await listen('numbered-previous-requested', () => navigateNumbered(-1).catch(fail));
 await listen('numbered-next-requested', () => navigateNumbered(1).catch(fail));
 function switchTab(direction) {
@@ -539,12 +551,12 @@ function switchTab(direction) {
 await listen('close-heading-requested', () => {
     if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
     cancelShortcuts();
-    if (!manuscriptEditor?.closeCurrentHeading()) status('閉じられる見出しの本文がありません。');
+    manuscriptEditor?.closeCurrentHeading();
 });
 await listen('open-heading-requested', () => {
     if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
     cancelShortcuts();
-    if (!manuscriptEditor?.openCurrentHeading()) status('この見出しは閉じていません。');
+    manuscriptEditor?.openCurrentHeading();
 });
 function showFileHeadings() {
     if (active?.kind !== 'text' || active.savingDraft || !manuscriptEditor || document.querySelector('dialog[open]')) return;
@@ -558,7 +570,7 @@ function showFileHeadings() {
         onChoose(heading) {
             if (manuscriptEditor !== editor) return;
             if (editor.snapshot().state.doc.toString() !== text) {
-                status('原稿が更新されました。見出し一覧を開き直してください。');
+                message('原稿が更新されました。見出し一覧を開き直してください。', { title: '見出しへ移動' });
                 return;
             }
             editor.jumpTo(heading.from);
@@ -601,7 +613,7 @@ async function showBookHeadings() {
                 (async () => {
                     await openText(heading.path);
                     if (active.doc.text !== heading.text) {
-                        status('原稿が更新されました。見出し一覧を開き直してください。');
+                        message('原稿が更新されました。見出し一覧を開き直してください。', { title: '見出しへ移動' });
                         return;
                     }
                     manuscriptEditor.jumpTo(heading.from);
@@ -630,7 +642,7 @@ await listen('track-document-requested', async () => {
         }
         if (tab.path !== path) return;
         const added = await invoke('track_document', { path });
-        status(added ? `${tab.title} を追跡に追加しました。「進捗を記録」でcommitできます` : `${tab.title} はすでに追跡されています`);
+        if (!added) status(`${tab.title} はすでに追跡されています`, false, 3000);
     } catch (error) { fail(error); }
 });
 for (const project of [false, true]) {
@@ -786,7 +798,7 @@ await listen('manage-tasks-requested', () => {
 
 await listen('run-task-requested', ({ payload: id }) => {
     if (!session) { message('プロジェクトを開いてからコマンドを実行してください').catch(fail); return; }
-    runNamedTask({ invoke, status, prepare: prepareTaskExecution, id, openInApp: openTaskOutputInApp }).catch(fail);
+    runNamedTask({ invoke, status, message, prepare: prepareTaskExecution, id, openInApp: openTaskOutputInApp }).catch(fail);
 });
 
 await listen('prepare-task-save', async ({ payload }) => {
@@ -819,7 +831,7 @@ async function prepareTaskExecution() {
     } finally { clearTimeout(timer); unlisten?.(); }
 }
 
-await listen('show-task-log-requested', () => showTaskLog({ invoke, status, openInApp: openTaskOutputInApp }));
+await listen('show-task-log-requested', () => showTaskLog({ invoke, status, message, openInApp: openTaskOutputInApp }));
 
 async function openTaskOutputInApp(path) {
     await prepareTaskExecution();

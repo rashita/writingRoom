@@ -62,7 +62,6 @@ export async function manageNamedTasks({ invoke, status, confirm }) {
         try {
             const defaultTask = list.querySelector('[name="default-task"]:checked')?.closest('fieldset').dataset.id || null;
             await invoke('save_named_tasks', { tasks, expected, defaultTask, expectedDefaultTask });
-            status('プロジェクトのコマンドを保存しました');
             dialog.close();
         } catch (e) { error.textContent = String(e); }
         finally { setBusy(false); }
@@ -126,21 +125,22 @@ function displayRecord(dialog, record, invoke, openInApp) {
         } finally { open.disabled = false; }
     };
 }
-export function showTaskLog({ invoke, status, openInApp }) {
+export function showTaskLog({ invoke, status, message, openInApp }) {
     const current = document.querySelector('#run-task-dialog');
     if (current?.dataset.running === 'true') { status('コマンドを実行中です'); return; }
-    if (!lastTaskLog) { status('このウィンドウにはコマンドのログがありません'); return; }
+    if (!lastTaskLog) { return message('このウィンドウにはコマンドのログがありません', { title: 'コマンドのログ' }); }
     if (current) { current.close(); current.remove(); }
     displayRecord(resultDialog(lastTaskLog.label), lastTaskLog, invoke, openInApp);
 }
-export async function runNamedTask({ invoke, status, prepare, id, openInApp }) {
+export async function runNamedTask({ invoke, status, message, prepare, id, openInApp }) {
     const previous = document.querySelector('#run-task-dialog');
     if (previous?.dataset.running === 'true') { status('コマンドを実行中です'); return; }
-    if (document.querySelector('#tasks-dialog')) { status('コマンドの登録画面を閉じてから実行してください'); return; }
+    if (document.querySelector('#tasks-dialog')) { await message('コマンドの登録画面を閉じてから実行してください', { title: 'コマンドを実行' }); return; }
     if (previous) { previous.close(); previous.remove(); }
     const dialog = resultDialog('コマンドを実行');
     // Mark busy before the first await to prevent overlapping starts.
     dialog.dataset.running = 'true';
+    let outputOpenFailed = false;
     const record = { label: 'コマンド', command: '', time: new Date().toLocaleString(), summary: '', log: '', output: '', success: false };
     try {
         const tasks = await invoke('get_named_tasks');
@@ -169,6 +169,7 @@ export async function runNamedTask({ invoke, status, prepare, id, openInApp }) {
                 record.summary += '\n成果物を開きました';
                 dialog.close();
             } catch (error) {
+                outputOpenFailed = true;
                 record.summary += `\n成果物を開けませんでした：${String(error)}`;
             }
         }
@@ -178,12 +179,13 @@ export async function runNamedTask({ invoke, status, prepare, id, openInApp }) {
     } finally {
         retainLog(record);
         dialog.dataset.running = 'false';
-        status(`${record.label}：${record.summary}`, !record.success || !!record.outputError);
+        if (!record.success || record.outputError || outputOpenFailed) status(`${record.label}：${record.summary}`, true);
+        else status('');
         if (dialog.open) {
             displayRecord(dialog, record, invoke, openInApp);
             const rerun = dialog.querySelector('.task-rerun');
             rerun.hidden = false;
-            rerun.onclick = () => runNamedTask({ invoke, status, prepare, id, openInApp });
+            rerun.onclick = () => runNamedTask({ invoke, status, message, prepare, id, openInApp });
         } else dialog.remove();
     }
 }

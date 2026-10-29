@@ -8,15 +8,15 @@ export function numberedPath(path, direction) {
     return path.slice(0, slash) + match[1] + String(number).padStart(match[2].length, '0') + (match[3] || '');
 }
 
-export function createNumberedNavigation({ getActive, invoke, confirm, openText, status, prepare = async () => true }) {
+export function createNumberedNavigation({ getActive, invoke, confirm, openText, message, prepare = async () => true }) {
     let busy = false;
     return async direction => {
         const tab = getActive();
         if (busy || tab?.kind !== 'text') return;
         const path = numberedPath(tab.path, direction);
         if (!path) {
-            status(/(?:^|\D)0+(?:\.[^.]+)?$/.test(tab.title) && direction < 0
-                ? 'これより前の連番ファイルはありません。' : 'ファイル名の末尾に連番がありません。');
+            await message(/(?:^|\D)0+(?:\.[^.]+)?$/.test(tab.title) && direction < 0
+                ? 'これより前の連番ファイルはありません。' : 'ファイル名の末尾に連番がありません。', { title: '連番ファイルへ移動' });
             return;
         }
         busy = true;

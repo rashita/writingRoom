@@ -2,7 +2,7 @@
 export async function recordProgress({ path, invoke, status, project = false }) {
     if (document.querySelector('#progress-dialog')) return;
     const expected = await invoke(project ? 'preview_project_progress' : 'preview_progress', { path });
-    if (!expected.diff) { status('前回のcommitから変更はありません'); return; }
+    if (!expected.diff) { status('前回のcommitから変更はありません', false, 3000); return; }
     const dialog = document.createElement('dialog');
     dialog.id = 'progress-dialog';
     dialog.style.cssText = 'width:min(760px,90vw);max-height:85vh;padding:24px;border:1px solid #cbd4cd;border-radius:8px;color:#303b38;background:#f4f3ee';
@@ -24,7 +24,6 @@ export async function recordProgress({ path, invoke, status, project = false }) 
         input.disabled = true;
         try {
             await invoke(project ? 'commit_project_progress' : 'commit_progress', { path, expected, message: input.value });
-            status(project ? 'プロジェクトの進捗をcommitしました' : '原稿の進捗をcommitしました');
             dialog.close();
         } catch (error) {
             dialog.querySelector('[role="alert"]').textContent = String(error);
