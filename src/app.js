@@ -209,8 +209,8 @@ async function closeTab(tab) {
     if (active === tab) active = tabs.at(-1);
     render();
 }
-await listen('close-tab-requested', () => closeTab(active).catch(fail));
-await listen('close-window-requested', () => {
+await win.listen('close-tab-requested', () => closeTab(active).catch(fail));
+await win.listen('close-window-requested', () => {
     if (!document.querySelector('dialog[open]')) win.close().catch(fail);
 });
 async function refreshHistory() {
@@ -494,7 +494,7 @@ function navigateFolder(tab, path, newTab) {
     active = tab;
     render();
 }
-await listen('show-filer-requested', () => {
+await win.listen('show-filer-requested', () => {
     if (session && !document.querySelector('dialog[open]')) openFolder('').catch(fail);
 });
 async function openFile(path) { if (/\.html?$/i.test(path))
@@ -611,10 +611,10 @@ async function chooseProject() { const root = await open({ title: '執筆プロ�
     return; await openProjectRoot(root); }
 await listen('history-changed', () => { if (!session) refreshHistory().catch(fail); });
 await listen('history-error', ({ payload }) => fail(payload));
-await listen('open-recent-requested', ({ payload: root }) => openProjectRoot(root).catch(fail));
-await listen('open-project-requested', () => chooseProject().catch(fail));
-await listen('save-requested', () => save().catch(fail));
-await listen('new-document-requested', async () => {
+await win.listen('open-recent-requested', ({ payload: root }) => openProjectRoot(root).catch(fail));
+await win.listen('open-project-requested', () => chooseProject().catch(fail));
+await win.listen('save-requested', () => save().catch(fail));
+await win.listen('new-document-requested', async () => {
     if (!session || document.querySelector('dialog[open]')) return;
     try {
         const doc = await invoke('create_draft');
@@ -654,8 +654,8 @@ const navigateNumbered = createNumberedNavigation({ getActive: () => active?.unt
         render();
         focusEditor();
     }, message });
-await listen('numbered-previous-requested', () => navigateNumbered(-1).catch(fail));
-await listen('numbered-next-requested', () => navigateNumbered(1).catch(fail));
+await win.listen('numbered-previous-requested', () => navigateNumbered(-1).catch(fail));
+await win.listen('numbered-next-requested', () => navigateNumbered(1).catch(fail));
 function switchTab(direction) {
     if (tabs.length < 2) return;
     const index = tabs.indexOf(active);
@@ -664,12 +664,12 @@ function switchTab(direction) {
     tabsEl.querySelector(`[data-tab-id="${active.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     focusEditor();
 }
-await listen('close-heading-requested', () => {
+await win.listen('close-heading-requested', () => {
     if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
     cancelShortcuts();
     manuscriptEditor?.closeCurrentHeading();
 });
-await listen('open-heading-requested', () => {
+await win.listen('open-heading-requested', () => {
     if (active?.kind !== 'text' || active.savingDraft || document.querySelector('dialog[open]')) return;
     cancelShortcuts();
     manuscriptEditor?.openCurrentHeading();
@@ -694,7 +694,7 @@ function showFileHeadings() {
         onClose(accepted) { if (manuscriptEditor === editor) editor.focus(accepted ? undefined : snapshot); }
     });
 }
-await listen('show-headings-requested', showFileHeadings);
+await win.listen('show-headings-requested', showFileHeadings);
 let loadingBookHeadings = false;
 async function showBookHeadings() {
     if (!session || loadingBookHeadings || document.querySelector('dialog[open]')) return;
@@ -739,10 +739,10 @@ async function showBookHeadings() {
         });
     } finally { loadingBookHeadings = false; }
 }
-await listen('show-book-headings-requested', () => showBookHeadings().catch(fail));
-await listen('tab-previous-requested', () => switchTab(-1));
-await listen('tab-next-requested', () => switchTab(1));
-await listen('track-document-requested', async () => {
+await win.listen('show-book-headings-requested', () => showBookHeadings().catch(fail));
+await win.listen('tab-previous-requested', () => switchTab(-1));
+await win.listen('tab-next-requested', () => switchTab(1));
+await win.listen('track-document-requested', async () => {
     try {
         if (document.querySelector('dialog[open]')) return;
         const tab = active;
@@ -762,7 +762,7 @@ await listen('track-document-requested', async () => {
     } catch (error) { fail(error); }
 });
 for (const project of [false, true]) {
-    await listen(project ? 'show-project-history-requested' : 'show-document-history-requested', async () => {
+    await win.listen(project ? 'show-project-history-requested' : 'show-document-history-requested', async () => {
         try {
             if (document.querySelector('dialog[open]')) return;
             if (!session) throw new Error('プロジェクトを開いてください。');
@@ -771,7 +771,7 @@ for (const project of [false, true]) {
         } catch (error) { fail(error); }
     });
 }
-await listen('record-project-progress-requested', async () => {
+await win.listen('record-project-progress-requested', async () => {
     try {
         if (document.querySelector('dialog[open]')) return;
         if (!session) throw new Error('プロジェクトを開いてください。');
@@ -793,16 +793,16 @@ async function recordCurrentProgress(tab = active) {
         await recordProgress({ path: tab.path, invoke, status });
     } catch (error) { fail(error); }
 }
-await listen('record-progress-requested', () => recordCurrentProgress());
+await win.listen('record-progress-requested', () => recordCurrentProgress());
 const syncTypewriterMenu = () => invoke('sync_typewriter_menu', { enabled: typewriterEnabled }).catch(fail);
 window.addEventListener('focus', syncTypewriterMenu);
-await listen('typewriter-mode-requested', () => {
+await win.listen('typewriter-mode-requested', () => {
     if (active?.kind !== 'text' || !manuscriptEditor) { syncTypewriterMenu(); return; }
     typewriterEnabled = !typewriterEnabled;
     manuscriptEditor.setTypewriter(typewriterEnabled);
     syncTypewriterMenu();
 });
-await listen('focus-mode-requested', () => focusMode.toggle());
+await win.listen('focus-mode-requested', () => focusMode.toggle());
 const applyEditorFontSize = size => {
     document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
 };
@@ -813,7 +813,7 @@ function changeEditorFontSize(action) {
         .catch(fail);
 }
 for (const action of ['increase', 'decrease', 'reset']) {
-    await listen(`font-${action}-requested`, () => changeEditorFontSize(action));
+    await win.listen(`font-${action}-requested`, () => changeEditorFontSize(action));
 }
 // The native menu handles =; accept + on keyboards where it uses a different key.
 window.addEventListener('keydown', event => {
@@ -876,7 +876,7 @@ await win.onCloseRequested(async (e) => { e.preventDefault(); try {
 catch (error) {
     fail(error);
 } });
-await listen('quit-requested', async () => { try {
+await win.listen('quit-requested', async () => { try {
     await editQueue;
     const dirty = await invoke('dirty_all');
     if (dirty.length && !await confirm(`未保存のファイルが ${dirty.length} 件あります。保存せずにアプリを終了しますか？\n\n${dirty.join('\n')}`, { title: 'Writing Roomを終了', kind: 'warning' }))
@@ -907,12 +907,12 @@ await win.onFocusChanged(({ payload: focused }) => {
     if (focused) invoke('refresh_task_menu').catch(fail);
 });
 
-await listen('manage-tasks-requested', () => {
+await win.listen('manage-tasks-requested', () => {
     if (!session) { message('プロジェクトを開いてからコマンドを登録してください').catch(fail); return; }
     manageNamedTasks({ invoke, status, confirm }).catch(fail);
 });
 
-await listen('run-task-requested', ({ payload: id }) => {
+await win.listen('run-task-requested', ({ payload: id }) => {
     if (!session) { message('プロジェクトを開いてからコマンドを実行してください').catch(fail); return; }
     runNamedTask({ invoke, status, message, prepare: prepareTaskExecution, id, openInApp: openTaskOutputInApp }).catch(fail);
 });
@@ -947,7 +947,7 @@ async function prepareTaskExecution() {
     } finally { clearTimeout(timer); unlisten?.(); }
 }
 
-await listen('show-task-log-requested', () => showTaskLog({ invoke, status, message, openInApp: openTaskOutputInApp }));
+await win.listen('show-task-log-requested', () => showTaskLog({ invoke, status, message, openInApp: openTaskOutputInApp }));
 
 async function openTaskOutputInApp(path) {
     await prepareTaskExecution();

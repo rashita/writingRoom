@@ -1341,7 +1341,8 @@ fn main() {
                         "tab-next" => "tab-next-requested",
                         _ => "open-project-requested",
                     };
-                    let _ = window.emit(name,());
+                    // Emitter::emit broadcasts even when called on a window.
+                    let _ = app.emit_to(window.label(),name,());
                 }
             }
             if event.id().as_ref() == "quit-confirm" {

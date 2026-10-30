@@ -4,9 +4,9 @@ import vm from 'node:vm';
 import { createEditorStateStore, editorKey } from '../src/editor-state.js';
 const source = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const saveSource = source.slice(source.indexOf('async function save(t = active)'), source.indexOf('async function openDashboard'));
-const closeSource = source.slice(source.indexOf('async function closeTab(tab)'), source.indexOf("await listen('close-tab-requested'"));
+const closeSource = source.slice(source.indexOf('async function closeTab(tab)'), source.indexOf("await win.listen('close-tab-requested'"));
 const rememberSource = source.slice(source.indexOf('function rememberTabs()'), source.indexOf('async function flushTabState()'));
-const listenerSource = source.slice(source.indexOf("await listen('new-document-requested'"), source.indexOf('const navigateNumbered'));
+const listenerSource = source.slice(source.indexOf("await win.listen('new-document-requested'"), source.indexOf('const navigateNumbered'));
 let selected = null, allowClose = false, failSave = false, listener;
 const calls = [];
 const context = {
@@ -17,7 +17,7 @@ const context = {
     document: { querySelector: () => null },
     render() {}, renderTabs() {}, focusEditor() {}, status() {}, fail(e) { throw e; },
     confirm: async () => allowClose,
-    listen: async (event, handler) => { listener = handler; },
+    win: { listen: async (event, handler) => { listener = handler; } },
     addTab(tab) { context.tabs.push(tab); context.active = tab; },
     invoke: async (command, args) => {
         calls.push([command, args]);
