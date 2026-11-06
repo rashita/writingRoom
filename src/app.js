@@ -67,7 +67,7 @@ const status = (text, error = false, duration = 0) => {
     if (duration) statusTimer = setTimeout(() => status(''), duration);
 };
 const fail = error => { status(String(error), true); return message(String(error), { title: 'Writing Room', kind: 'error' }); };
-const chordHint = 'K：この原稿を記録 ／ L：この原稿の履歴 ／ Esc：キャンセル';
+const chordHint = 'K：プロジェクトを記録 ／ L：プロジェクトの履歴 ／ Esc：キャンセル';
 let statusBeforeChord;
 const chordInput = createChordInput(document);
 function waitForChord(hint, enabled) {
@@ -88,14 +88,11 @@ function waitForChord(hint, enabled) {
     }
 }
 const historyShortcuts = createHistoryShortcuts({
-    getContext: () => session && active?.kind === 'text' && !active.savingDraft &&
-        !document.querySelector('dialog[open]') ? active : null,
+    getContext: () => session && !active?.savingDraft &&
+        !document.querySelector('dialog[open]') ? session : null,
     waiting: enabled => waitForChord(chordHint, enabled),
-    record: tab => recordCurrentProgress(tab),
-    history: tab => {
-        if (tab.untitled) { message('履歴を確認するには、原稿を保存してください。', { title: '原稿の履歴' }); return; }
-        showHistory({ path: tab.path, invoke }).catch(fail);
-    }
+    record: () => recordProjectProgress(),
+    history: () => showHistory({ invoke }).catch(fail)
 });
 const headingHint = 'P：閉じる ／ O：開く ／ Esc：キャンセル';
 const headingShortcuts = createChordShortcuts({
@@ -742,58 +739,21 @@ async function showBookHeadings() {
 await win.listen('show-book-headings-requested', () => showBookHeadings().catch(fail));
 await win.listen('tab-previous-requested', () => switchTab(-1));
 await win.listen('tab-next-requested', () => switchTab(1));
-await win.listen('track-document-requested', async () => {
-    try {
-        if (document.querySelector('dialog[open]')) return;
-        const tab = active;
-        if (tab?.kind !== 'text') throw new Error('追跡に追加する原稿の編集タブを開いてください。');
-        let path = tab.path;
-        await editQueue;
-        if (tab.syncError) throw new Error(tab.syncError);
-        if (tab.untitled || tab.doc.text !== tab.doc.original) {
-            if (!await confirm('この原稿を保存してから追跡に追加しますか？', { title: '追跡に追加', okLabel: '保存して追加' })) return;
-            if (tab.path !== path) return;
-            if (!await save(tab)) return;
-            path = tab.path;
-        }
-        if (tab.path !== path) return;
-        const added = await invoke('track_document', { path });
-        if (!added) status(`${tab.title} はすでに追跡されています`, false, 3000);
-    } catch (error) { fail(error); }
-});
-for (const project of [false, true]) {
-    await win.listen(project ? 'show-project-history-requested' : 'show-document-history-requested', async () => {
-        try {
-            if (document.querySelector('dialog[open]')) return;
-            if (!session) throw new Error('プロジェクトを開いてください。');
-            if (!project && (active?.kind !== 'text' || active.untitled)) throw new Error('履歴を確認する原稿の編集タブを開いてください。');
-            await showHistory({ path: project ? null : active.path, invoke });
-        } catch (error) { fail(error); }
-    });
-}
-await win.listen('record-project-progress-requested', async () => {
+await win.listen('show-project-history-requested', async () => {
     try {
         if (document.querySelector('dialog[open]')) return;
         if (!session) throw new Error('プロジェクトを開いてください。');
-        if (!await confirm('プロジェクト内の未保存の原稿を保存してから、全体の差分を確認しますか？', { title: 'プロジェクトを記録', okLabel: '保存して続ける' })) return;
-        await prepareTaskExecution();
-        await recordProgress({ invoke, status, project: true });
+        await showHistory({ invoke });
     } catch (error) { fail(error); }
 });
-async function recordCurrentProgress(tab = active) {
+async function recordProjectProgress() {
     try {
-        await editQueue;
         if (document.querySelector('dialog[open]')) return;
-        if (tab?.kind !== 'text') throw new Error('記録する原稿の編集タブを開いてください。');
-        if (tab.syncError) throw new Error(tab.syncError);
-        if (tab.untitled || tab.doc.text !== tab.doc.original) {
-            if (!await confirm('この原稿を保存してから差分を確認しますか？', { title: 'この原稿を記録', okLabel: '保存して続ける' })) return;
-            if (!await save(tab)) return;
-        }
-        await recordProgress({ path: tab.path, invoke, status });
+        if (!session) throw new Error('プロジェクトを開いてください。');
+        await recordProgress({ invoke, status });
     } catch (error) { fail(error); }
 }
-await win.listen('record-progress-requested', () => recordCurrentProgress());
+await win.listen('record-project-progress-requested', () => recordProjectProgress());
 const syncTypewriterMenu = () => invoke('sync_typewriter_menu', { enabled: typewriterEnabled }).catch(fail);
 window.addEventListener('focus', syncTypewriterMenu);
 await win.listen('typewriter-mode-requested', () => {

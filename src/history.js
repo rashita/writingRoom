@@ -1,11 +1,11 @@
-export async function showHistory({ path = null, invoke }) {
+export async function showHistory({ invoke }) {
     if (document.querySelector('dialog[open]')) return;
     const dialog = document.createElement('dialog');
     dialog.className = 'history-dialog';
     dialog.setAttribute('aria-labelledby', 'history-title');
     dialog.innerHTML = `<header><div><h2 id="history-title"></h2><p class="history-scope"></p></div><button type="button" aria-label="履歴を閉じる">閉じる</button></header><p class="history-error" role="alert"></p><div class="history-layout"><section class="history-list" aria-label="記録一覧"><div class="history-entries"></div><p class="history-state" role="status"></p><button class="history-more" type="button">さらに読み込む</button></section><section class="history-detail" aria-label="記録の詳細"><p class="history-meta"></p><pre class="history-message"></pre><pre class="history-diff">記録を選ぶと差分を表示します。</pre></section></div>`;
-    dialog.querySelector('h2').textContent = path ? 'この原稿の履歴' : 'プロジェクトの履歴';
-    dialog.querySelector('.history-scope').textContent = path || 'プロジェクトフォルダ内の記録';
+    dialog.querySelector('h2').textContent = 'プロジェクトの履歴';
+    dialog.querySelector('.history-scope').textContent = 'プロジェクトフォルダ内の全ファイルの記録';
     dialog.querySelector('header button').onclick = () => dialog.close();
     dialog.addEventListener('close', () => dialog.remove());
     const entries = dialog.querySelector('.history-entries');
@@ -25,7 +25,7 @@ export async function showHistory({ path = null, invoke }) {
         diff.textContent = '差分を読み込んでいます…';
         error.textContent = '';
         try {
-            const patch = await invoke('progress_history_diff', { path, id: entry.id });
+            const patch = await invoke('progress_history_diff', { id: entry.id });
             if (request !== selection || !dialog.isConnected) return;
             diff.replaceChildren();
             if (!patch) { diff.textContent = 'この記録には表示できる差分がありません。'; return; }
@@ -51,7 +51,7 @@ export async function showHistory({ path = null, invoke }) {
         error.textContent = '';
         state.textContent = '履歴を読み込んでいます…';
         try {
-            const page = await invoke('list_progress_history', { path, offset });
+            const page = await invoke('list_progress_history', { offset });
             if (!dialog.isConnected) return;
             for (const entry of page) {
                 const button = document.createElement('button');
