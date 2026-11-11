@@ -9,12 +9,16 @@ async function restore(saved, missing = [], welcome = false) {
     const calls = [];
     const context = {
         tabs: [], active: null, session: null, restoringTabs: false, canResumeWorkspace: false,
+        editorAppearance: {}, appearanceUpdates: 0,
+        appearanceRoot: { style: { setProperty() {}, removeProperty() {} } },
+        applyEditorAppearance: (_, appearance) => { calls.push(appearance.background ?? 'default-appearance'); },
         win: { setTitle: async () => {} },
         invoke: async (command, args) => {
             calls.push(command);
             if (command === 'get_session') return welcome ? null : { root: '/project', parent: null };
             if (command === 'can_resume_workspace') return true;
             if (command === 'get_tab_state') return saved;
+            if (command === 'get_project_editor_appearance') return { background: '#005050' };
             if (command === 'validate_saved_tab' && missing.includes(args.tab.path)) throw Error('missing');
         },
         render: () => {}, refreshHistory: async () => {},
@@ -44,6 +48,7 @@ let result = await restore(saved);
 assert.equal(result.context.tabs.map(tab => tab.kind).join(','), 'html,text,text');
 assert.equal(result.context.active.title, 'ソース');
 assert.equal(result.context.restoringTabs, false);
+assert(result.calls.indexOf('#005050') < result.calls.indexOf('get_tab_state'));
 assert(!result.calls.includes('default-dashboard'));
 result = await restore(saved, ['原稿.md']);
 assert.equal(result.context.tabs.length, 2);
@@ -76,4 +81,5 @@ assert.equal(result.context.tabs.length, 0);
 assert.equal(result.context.canResumeWorkspace, true);
 assert(!result.calls.includes('restore_workspace'));
 assert(!result.calls.includes('get_tab_state'));
+assert(result.calls.includes('default-appearance'));
 console.log('Tab restoration checks passed');

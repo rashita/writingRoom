@@ -1,7 +1,7 @@
 import { createTypewriter } from './typewriter.js';
 import { headingFolds, closeHeading, openHeading } from './heading-fold.js';
 import { currentHeadingRange } from './headings.js';
-import { EditorState, EditorView, StateEffect, history, historyKeymap, defaultKeymap, keymap, drawSelection } from './cm-bundle.js';
+import { EditorState, EditorView, StateEffect, history, historyKeymap, defaultKeymap, keymap, drawSelection, highlightActiveLine } from './cm-bundle.js';
 
 function textChange(old, text) {
     let from = 0, end = old.length, nextEnd = text.length;
@@ -27,6 +27,7 @@ export function createEditor({ parent, text, title, disabled = false, saved, typ
         history(),
         headingFolds,
         drawSelection(),
+        highlightActiveLine(),
         keymap.of([{ key: 'Enter', run: insertPlainNewline, shift: insertPlainNewline },
             ...historyKeymap, ...defaultKeymap.filter(binding =>
             binding.key !== 'Enter' && binding.key !== 'Mod-Enter')]),

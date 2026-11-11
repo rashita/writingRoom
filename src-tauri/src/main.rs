@@ -44,6 +44,87 @@ struct Config {
     tasks: Vec<NamedTask>,
     #[serde(default)]
     default_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editor: Option<ProjectEditorAppearance>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ProjectEditorAppearance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    foreground: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_line_background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    font_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    font_size: Option<u8>,
+}
+
+impl ProjectEditorAppearance {
+    fn validate(&self) -> Result<()> {
+        let colors = [&self.background, &self.foreground, &self.active_line_background, &self.selection_background];
+        for color in colors.into_iter().flatten() {
+            if color.len() != 7
+                || !color.starts_with('#')
+                || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+            {
+                return Err("色は #005050 のような6桁のカラーコードで指定してください".into());
+            }
+        }
+        if self.font_size.is_some_and(|size| !(12..=32).contains(&size)) {
+            return Err("文字サイズは12〜32pxで指定してください".into());
+        }
+        if self.font_family.as_ref().is_some_and(|family| {
+            family.trim().is_empty() || family.chars().any(char::is_control)
+        }) {
+            return Err("フォント名を確認してください".into());
+        }
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn get_project_editor_appearance(window: WebviewWindow, state: State<Mutex<Store>>) -> Result<ProjectEditorAppearance> {
+    Ok(config(&session(&window, &state)?.root)?.editor.unwrap_or_default())
+}
+
+#[tauri::command]
+fn save_project_editor_appearance(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<Mutex<Store>>,
+    appearance: ProjectEditorAppearance,
+    expected: ProjectEditorAppearance,
+) -> Result<()> {
+    appearance.validate()?;
+    let store = lock(&state);
+    let session = store.sessions.get(window.label()).ok_or("プロジェクトが未選択です")?;
+    let config = config(&session.root)?;
+    if config.editor.as_ref().cloned().unwrap_or_default() != expected {
+        return Err("エディタの外観が別の場所で変更されました。設定を閉じて開き直してください".into());
+    }
+    write_editor_appearance(&app, &store, &session.root, config, appearance)
+}
+
+fn write_editor_appearance(
+    app: &tauri::AppHandle,
+    store: &Store,
+    root: &str,
+    mut config: Config,
+    appearance: ProjectEditorAppearance,
+) -> Result<()> {
+    config.editor = (appearance != ProjectEditorAppearance::default()).then_some(appearance.clone());
+    write_config(root, &config)?;
+    for (label, target) in &store.sessions {
+        if target.root == root {
+            let _ = app.emit_to(label.as_str(), "project-editor-appearance-changed", &appearance);
+        }
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct NamedTask {
@@ -617,8 +698,11 @@ fn open_project(
         return Err("フォルダを選んでください".into());
     }
     let root = p.to_string_lossy().into_owned();
-    let c = config(&root)?;
-    write_config(&root, &c)?;
+    {
+        let _store = lock(&state);
+        let c = config(&root)?;
+        write_config(&root, &c)?;
+    }
     let label = if new_window.unwrap_or(false) || lock(&state).sessions.contains_key(window.label())
     {
         format!("project-{}", NEXT.fetch_add(1, Ordering::Relaxed))
@@ -791,7 +875,8 @@ fn dashboard(
     disable: bool,
     create: bool,
 ) -> Result<Option<String>> {
-    let s = session(&window, &state)?;
+    let store = lock(&state);
+    let s = store.sessions.get(window.label()).ok_or("プロジェクトが未選択です")?;
     let dir = scoped(&s.root, &folder)?;
     let mut c = config(&s.root)?;
     if disable {
@@ -1146,7 +1231,27 @@ fn get_editor_font_size(state: State<Mutex<EditorPreferencesStore>>) -> Result<u
     Ok(store.value.font_size)
 }
 #[tauri::command]
-fn change_editor_font_size(app: tauri::AppHandle, state: State<Mutex<EditorPreferencesStore>>, action: String) -> Result<u8> {
+fn change_editor_font_size(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    projects: State<Mutex<Store>>,
+    state: State<Mutex<EditorPreferencesStore>>,
+    action: String,
+) -> Result<u8> {
+    {
+        let projects = lock(&projects);
+        if let Some(session) = projects.sessions.get(window.label()) {
+            let config = config(&session.root)?;
+            if let Some(mut appearance) = config.editor.clone() {
+                if let Some(current) = appearance.font_size {
+                    let size = adjusted_font_size(current, &action)?;
+                    appearance.font_size = (action != "reset").then_some(size);
+                    write_editor_appearance(&app, &projects, &session.root, config, appearance)?;
+                    return Ok(if action == "reset" { state.lock().unwrap().value.font_size } else { size });
+                }
+            }
+        }
+    }
     let mut store = state.lock().unwrap();
     if let Some(error) = &store.error { return Err(error.clone()); }
     let font_size = adjusted_font_size(store.value.font_size, &action)?;
@@ -1248,6 +1353,7 @@ fn main() {
             let typewriter = CheckMenuItem::with_id(app,"toggle-typewriter-mode","タイプライターモード",true,false,None::<&str>)?;
             let focus = MenuItem::with_id(app,"toggle-focus-mode","全集中モード",true,Some("CmdOrCtrl+Alt+F"))?;
             let filer = MenuItem::with_id(app,"show-filer","ファイラー",true,None::<&str>)?;
+            let editor_appearance = MenuItem::with_id(app,"editor-appearance","プロジェクトのエディタ外観…",true,None::<&str>)?;
             let increase = MenuItem::with_id(app,"font-increase","文字を大きくする",true,Some("CmdOrCtrl+="))?;
             let decrease = MenuItem::with_id(app,"font-decrease","文字を小さくする",true,Some("CmdOrCtrl+-"))?;
             let reset = MenuItem::with_id(app,"font-reset","文字サイズを標準に戻す",true,Some("CmdOrCtrl+0"))?;
@@ -1260,7 +1366,7 @@ fn main() {
             let close_heading = MenuItem::with_id(app,"close-heading","直近の見出しを閉じる（⌘H → P）",true,None::<&str>)?;
             let open_heading = MenuItem::with_id(app,"open-heading","直近の見出しを開く（⌘H → O）",true,None::<&str>)?;
             let navigation = SubmenuBuilder::new(app,"移動").item(&headings).item(&book_headings).item(&close_heading).item(&open_heading).separator().item(&previous_tab).item(&next_tab).separator().item(&previous).item(&next).build()?;
-            let view = SubmenuBuilder::new(app,"表示").item(&filer).separator().item(&increase).item(&decrease).item(&reset).separator().item(&focus).item(&typewriter).separator().item(&inspect).build()?;
+            let view = SubmenuBuilder::new(app,"表示").item(&filer).separator().item(&editor_appearance).item(&increase).item(&decrease).item(&reset).separator().item(&focus).item(&typewriter).separator().item(&inspect).build()?;
             let codex = MenuItem::with_id(app,"launch-codex","codexを起動",true,None::<&str>)?;
             let agent = SubmenuBuilder::new(app,"エージェント").item(&codex).build()?;
             MenuBuilder::new(app).items(&[&app_menu,&file,&edit,&history,&work,&agent,&view,&navigation]).build()
@@ -1305,7 +1411,7 @@ fn main() {
                     if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
                 }
             }
-            if matches!(event.id().as_ref(), "show-book-headings" | "show-filer" | "open-heading" | "close-heading" | "show-headings" | "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "record-project-progress" | "show-project-history" | "toggle-typewriter-mode" | "toggle-focus-mode" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
+            if matches!(event.id().as_ref(), "show-book-headings" | "show-filer" | "open-heading" | "close-heading" | "show-headings" | "show-task-log" | "close-tab" | "close-project-window" | "run-task" | "manage-tasks" | "open-project" | "save-document" | "new-document" | "record-project-progress" | "show-project-history" | "toggle-typewriter-mode" | "toggle-focus-mode" | "editor-appearance" | "font-increase" | "font-decrease" | "font-reset" | "numbered-previous" | "numbered-next" | "tab-previous" | "tab-next") {
                 let windows = app.webview_windows();
                 let target = windows.values().find(|window|window.is_focused().unwrap_or(false)).or_else(||windows.get("main")).or_else(||windows.values().next());
                 if let Some(window) = target {
@@ -1326,6 +1432,7 @@ fn main() {
                         "record-project-progress" => "record-project-progress-requested",
                         "toggle-typewriter-mode" => "typewriter-mode-requested",
                         "toggle-focus-mode" => "focus-mode-requested",
+                        "editor-appearance" => "editor-appearance-requested",
                         "font-increase" => "font-increase-requested",
                         "font-decrease" => "font-decrease-requested",
                         "font-reset" => "font-reset-requested",
@@ -1376,7 +1483,7 @@ fn main() {
                 Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
             }
         })
-        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, get_editor_font_size, change_editor_font_size, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, rename_file, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
+        .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, get_editor_font_size, change_editor_font_size, get_project_editor_appearance, save_project_editor_appearance, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, rename_file, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])
         .build(tauri::generate_context!()).expect("アプリを起動できません");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -1417,6 +1524,39 @@ fn decode(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_editor_appearance_is_optional_and_preserves_existing_settings() {
+        let existing = serde_json::json!({
+            "version": 1,
+            "manuscript_folder": "原稿",
+            "dashboards": {"": "index.html"}
+        });
+        let mut config: Config = serde_json::from_value(existing.clone()).unwrap();
+        assert!(config.editor.is_none());
+        assert!(serde_json::to_value(&config).unwrap().get("editor").is_none());
+
+        let editor = serde_json::json!({
+            "background": "#005050",
+            "activeLineBackground": "#004444",
+            "fontSize": 26
+        });
+        let appearance: ProjectEditorAppearance = serde_json::from_value(editor.clone()).unwrap();
+        appearance.validate().unwrap();
+        config.editor = Some(appearance);
+        let saved = serde_json::to_value(config).unwrap();
+        assert_eq!(saved["editor"], editor);
+        assert_eq!(saved["manuscript_folder"], existing["manuscript_folder"]);
+        assert_eq!(saved["dashboards"], existing["dashboards"]);
+        for invalid in [
+            serde_json::json!({"background": "#00505Z"}),
+            serde_json::json!({"fontSize": 33}),
+        ] {
+            let appearance: ProjectEditorAppearance = serde_json::from_value(invalid).unwrap();
+            assert!(appearance.validate().is_err());
+        }
+    }
+
     #[test]
     fn folders_are_created_in_selected_parent_without_overwriting() {
         let dir = std::env::temp_dir().join(format!("writingroom-folders-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));

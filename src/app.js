@@ -2,6 +2,7 @@ import { startTypewriterTrace } from './editor-trace.js';
 import { getHeadings, showHeadingList } from './headings.js';
 import { createEditorStateStore, editorKey } from './editor-state.js';
 import { createEditor } from './editor.js';
+import { applyEditorAppearance, showEditorAppearance } from './editor-appearance.js';
 import { createChordInput } from './chord-input.js';
 import { createHistoryShortcuts, createChordShortcuts } from './history-shortcuts.js';
 import { showHistory } from './history.js';
@@ -23,6 +24,10 @@ const content = document.querySelector('#content');
 const tabsEl = document.querySelector('#tabs');
 let session, tabs = [], active, sequence = 0;
 let draggedTab = null;
+let editorAppearance = {};
+let previewingAppearance = false;
+let appearanceUpdates = 0;
+const appearanceRoot = document.documentElement;
 window.startTypewriterTrace = startTypewriterTrace;
 let typewriterEnabled = false;
 const editorStates = createEditorStateStore();
@@ -256,6 +261,14 @@ async function showTabMenu(tab) {
                 if (tab.syncError) throw new Error(tab.syncError);
                 await invoke('open_child', { path: tab.path });
             })().catch(fail)
+        }] : []), ...(tab.kind === 'html' ? [{
+            id: `tab-reload-${tab.id}`,
+            text: 'リロード',
+            action: () => {
+                if (!tabs.includes(tab)) return;
+                active = tab;
+                render();
+            }
         }] : []), ...(tab.kind === 'text' ? [{
             id: `tab-finder-${tab.id}`,
             text: 'Finderで開く',
@@ -515,8 +528,10 @@ async function saveTextTab(t) {
     await editQueue;
     if (t.syncError) throw new Error(t.syncError);
     if (t.untitled) {
+        const firstLine = t.doc.text.split(/\r\n|[\n\r]/, 1)[0].trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+        const suggestedName = `${firstLine || '無題'}.md`;
         const selected = await invoke('plugin:dialog|save', { options: {
-            title: '新しい原稿を保存', defaultPath: `${session.root}/無題.txt`,
+            title: '新しい原稿を保存', defaultPath: `${session.root}/${suggestedName}`,
             filters: [{ name: 'テキスト', extensions: ['txt', 'md'] }]
         } });
         if (!selected || !tabs.includes(t)) return false;
@@ -565,10 +580,24 @@ async function setup() {
     restoringTabs = true;
     session = await invoke('get_session');
     if (!session) {
+        appearanceRoot.style.removeProperty('--project-hue');
+        editorAppearance = {};
+        applyEditorAppearance(appearanceRoot, editorAppearance);
         canResumeWorkspace = await invoke('can_resume_workspace');
         render(); await refreshHistory(); await invoke('refresh_task_menu'); return;
     }
     const projectName = session.root.split('/').at(-1);
+    let hash = 2166136261;
+    for (const character of projectName) hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
+    appearanceRoot.style.setProperty('--project-hue', String((hash >>> 0) % 360));
+    try {
+        const updates = appearanceUpdates;
+        const appearance = await invoke('get_project_editor_appearance');
+        if (updates === appearanceUpdates) {
+            editorAppearance = appearance;
+            applyEditorAppearance(appearanceRoot, appearance);
+        }
+    } catch (error) { fail(error); }
     await win.setTitle(session.file ? `${session.file.split('/').at(-1)} — Writing Room — ${projectName}` : `Writing Room — ${projectName}`);
     const missing = [];
     let saved;
@@ -763,12 +792,53 @@ await win.listen('typewriter-mode-requested', () => {
     syncTypewriterMenu();
 });
 await win.listen('focus-mode-requested', () => focusMode.toggle());
+await win.listen('project-editor-appearance-changed', ({ payload }) => {
+    appearanceUpdates++;
+    editorAppearance = payload;
+    if (!previewingAppearance) applyEditorAppearance(appearanceRoot, editorAppearance);
+});
+let openingAppearance = false;
+async function openEditorAppearance() {
+    if (openingAppearance || document.querySelector('dialog[open]')) return;
+    if (!session) {
+        await message('プロジェクトを開いてからエディタの外観を設定してください。');
+        return;
+    }
+    openingAppearance = true;
+    try {
+        const updates = appearanceUpdates;
+        const stored = await invoke('get_project_editor_appearance');
+        const expected = updates === appearanceUpdates ? stored : editorAppearance;
+        if (document.querySelector('dialog[open]')) return;
+        editorAppearance = expected;
+        showEditorAppearance({
+            appearance: expected,
+            preview: draft => {
+                previewingAppearance = true;
+                applyEditorAppearance(appearanceRoot, draft);
+            },
+            save: async appearance => {
+                const updates = appearanceUpdates;
+                await invoke('save_project_editor_appearance', { appearance, expected });
+                if (updates === appearanceUpdates) editorAppearance = appearance;
+            },
+            close: () => {
+                previewingAppearance = false;
+                applyEditorAppearance(appearanceRoot, editorAppearance);
+                focusEditor();
+            }
+        });
+    } finally {
+        openingAppearance = false;
+    }
+}
+await win.listen('editor-appearance-requested', () => openEditorAppearance().catch(fail));
 const applyEditorFontSize = size => {
     document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
 };
 let fontSizeQueue = Promise.resolve();
 function changeEditorFontSize(action) {
-    if (active?.kind !== 'text') return;
+    if (active?.kind !== 'text' || document.querySelector('dialog[open]')) return;
     fontSizeQueue = fontSizeQueue.then(() => invoke('change_editor_font_size', { action }))
         .catch(fail);
 }
@@ -778,7 +848,7 @@ for (const action of ['increase', 'decrease', 'reset']) {
 // The native menu handles =; accept + on keyboards where it uses a different key.
 window.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.isComposing || event.altKey ||
-        !(event.metaKey || event.ctrlKey) || event.key !== '+' || active?.kind !== 'text') return;
+        !(event.metaKey || event.ctrlKey) || event.key !== '+' || active?.kind !== 'text' || document.querySelector('dialog[open]')) return;
     event.preventDefault();
     changeEditorFontSize('increase');
 });
