@@ -104,6 +104,8 @@ cp dist/cm-bundle.js /Users/Tadanori/Dev/writingRoom/src/cm-bundle.js
 
 ダッシュボードタブを右クリックして「ソースを編集」を選ぶとHTMLの編集タブを開けます。
 同じメニューの「リロード」で、保存済みのHTMLを読み込み直せます。
+プロジェクト内のHTML・CSS・JavaScript・画像などはキャッシュに保存せず、読み込み時にファイルを取得します。
+HTMLの縦横のスクロール位置はタブごとに保持し、タブ切り替えやリロード後に復元します。タブを閉じると破棄し、アプリ終了後には引き継ぎません。
 
 HTMLは通常のHTML・CSS・JavaScriptを記述できます。相対パスの画像・CSS・スクリプトに対応し、相対リンクのフォルダやテキストをアプリで開きます。ダッシュボードはsandbox付きiframeで実行され、Tauriのファイル操作APIは公開していません。`localStorage` 等の同一オリジン機能は使用できません。
 

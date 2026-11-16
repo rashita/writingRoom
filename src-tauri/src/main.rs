@@ -1386,7 +1386,7 @@ fn main() {
             if let Some(encoded) = event.id().as_ref().strip_prefix("named-task:") {
                 if let Ok((label, id)) = serde_json::from_str::<(String, String)>(encoded) {
                     if let Some(window) = app.get_webview_window(&label).filter(|w| w.is_focused().unwrap_or(false)) {
-                        let _ = window.emit("run-task-requested", id);
+                        let _ = app.emit_to(window.label(), "run-task-requested", id);
                     }
                 }
                 return;
@@ -1478,9 +1478,14 @@ fn main() {
                 "jpg" | "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp",
                 "json" => "application/json", _ => "application/octet-stream"
             };
+            // Relative CSS, scripts and images keep the same URL when the HTML
+            // iframe is recreated. Always read project resources from disk.
+            let builder = tauri::http::Response::builder()
+                .header("Cache-Control", "no-store")
+                .header("Access-Control-Allow-Origin", "*");
             match response {
-                Ok(bytes) => tauri::http::Response::builder().header("Content-Type", mime).header("Access-Control-Allow-Origin", "*").body(bytes).unwrap(),
-                Err(e) => tauri::http::Response::builder().status(404).body(e.into_bytes()).unwrap()
+                Ok(bytes) => builder.header("Content-Type", mime).body(bytes).unwrap(),
+                Err(e) => builder.status(404).body(e.into_bytes()).unwrap()
             }
         })
         .invoke_handler(tauri::generate_handler![sync_typewriter_menu, drafts::create_draft, drafts::update_draft, drafts::discard_draft, drafts::save_draft, new_welcome, prepare_task_output, open_task_output, get_named_task_settings, refresh_task_menu, project_editor_windows, run_named_task, get_named_tasks, save_named_tasks, progress::list_progress_history, progress::progress_history_diff, progress::preview_project_progress, progress::commit_project_progress, get_editor_font_size, change_editor_font_size, get_project_editor_appearance, save_project_editor_appearance, get_session, get_manuscript_folder, open_project, recent_projects, forget_project, create_folder, rename_file, list_files, dashboard, dashboard_disabled, create_numbered_document, read_document, update_document, save_document, open_child, dirty_project, close_window, dirty_all, quit_app, open_external_url, reveal_in_finder, get_tab_state, save_tab_state, restore_workspace, validate_saved_tab, can_resume_workspace, open_welcome])

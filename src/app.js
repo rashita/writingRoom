@@ -1,3 +1,4 @@
+import { trackHtmlScroll } from './html-scroll.js';
 import { startTypewriterTrace } from './editor-trace.js';
 import { getHeadings, showHeadingList } from './headings.js';
 import { createEditorStateStore, editorKey } from './editor-state.js';
@@ -32,6 +33,7 @@ window.startTypewriterTrace = startTypewriterTrace;
 let typewriterEnabled = false;
 const editorStates = createEditorStateStore();
 let manuscriptEditor = null;
+let stopTrackingHtmlScroll = () => {};
 let closeHeadingList = () => {};
 let rememberEditorPosition = () => {};
 const focusMode = createFocusMode(document.body, () => active?.kind === 'text' ? manuscriptEditor : null);
@@ -349,6 +351,8 @@ function focusEditor() {
     manuscriptEditor?.focus();
 }
 function render() {
+    stopTrackingHtmlScroll();
+    stopTrackingHtmlScroll = () => {};
     closeHeadingList();
     cancelShortcuts();
     rememberEditorPosition();
@@ -385,6 +389,7 @@ function render() {
     const iframe = document.createElement('iframe');
     iframe.title = 'プロジェクトのダッシュボード';
     iframe.sandbox = 'allow-scripts';
+    stopTrackingHtmlScroll = trackHtmlScroll(window, iframe, t);
     iframe.src = `${assetUrl(t.path)}?v=${Date.now()}`;
     content.append(iframe);
 } if (t.kind === 'pdf') {

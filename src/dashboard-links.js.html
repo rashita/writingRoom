@@ -1,4 +1,23 @@
 <script>
+(() => {
+    let restored = false;
+    window.addEventListener('message', event => {
+        if (event.source !== parent || event.data?.type !== 'project-scroll-restore' || restored) return;
+        const position = event.data.position;
+        if (!position || !Number.isFinite(position.top) || !Number.isFinite(position.left)) return;
+        const scroller = document.scrollingElement;
+        if (!scroller) return;
+        scroller.scrollTop = position.top;
+        scroller.scrollLeft = position.left;
+        restored = true;
+    });
+    window.addEventListener('scroll', () => {
+        if (!restored) return;
+        parent.postMessage({ type: 'project-scroll', position: { top: window.scrollY, left: window.scrollX } }, '*');
+    });
+    // Wait for images and styles before restoring the document's scroll position.
+    window.addEventListener('load', () => parent.postMessage({ type: 'project-scroll-ready' }, '*'), { once: true });
+})();
 document.addEventListener('click', event => {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.defaultPrevented) return;

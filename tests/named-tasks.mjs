@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { runNamedTask, showTaskLog } from '../src/named-tasks.js';
+
+// Window.emit broadcasts in Tauri, so menu commands must use a targeted event.
+const backend = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+const namedTaskMenu = backend.slice(backend.indexOf('if let Some(encoded) = event.id()'), backend.indexOf('if event.id().as_ref() == "new-window"'));
+assert.match(namedTaskMenu, /app\.emit_to\(window\.label\(\), "run-task-requested", id\)/);
+assert.doesNotMatch(namedTaskMenu, /window\.emit\(/);
 
 // Only the result window surface is needed to exercise the execution lifecycle.
 let current;
